@@ -192,7 +192,10 @@ sudo /tmp/vkturn-install.sh uninstall --purge
 --source-ref / WDTT_SOURCE_REF   branch, tag или commit, default main
 --go-version / WDTT_GO_VERSION   Go version, default 1.25.0
 --no-firewall / WDTT_NO_FIREWALL не трогать iptables
+--with-firewall                  снова включить managed iptables после --no-firewall
 ```
+
+При повторном запуске параметры, переданные флагами или переменными окружения, имеют приоритет над сохраненными значениями из `/etc/wdtt/wdtt.env`.
 
 Пример с доменом и нестандартным SSH-портом:
 

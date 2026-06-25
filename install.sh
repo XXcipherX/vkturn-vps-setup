@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.1"
 
 WDTT_SOURCE_REPO_DEFAULT="https://github.com/amurcanov/proxy-turn-vk-android.git"
 WDTT_SOURCE_REF_DEFAULT="main"
@@ -32,8 +32,29 @@ GO_VERSION="${WDTT_GO_VERSION:-$WDTT_GO_VERSION_DEFAULT}"
 NO_FIREWALL="${WDTT_NO_FIREWALL:-0}"
 PURGE="0"
 
+PASSWORD_SET=0; [ "${WDTT_PASSWORD+x}" = "x" ] && PASSWORD_SET=1
+VK_LINK_SET=0; [ "${WDTT_VK_LINK+x}" = "x" ] && VK_LINK_SET=1
+PUBLIC_HOST_SET=0; [ "${WDTT_PUBLIC_HOST+x}" = "x" ] && PUBLIC_HOST_SET=1
+DTLS_PORT_SET=0; [ "${WDTT_DTLS_PORT+x}" = "x" ] && DTLS_PORT_SET=1
+WG_PORT_SET=0; [ "${WDTT_WG_PORT+x}" = "x" ] && WG_PORT_SET=1
+SSH_PORT_SET=0; [ "${WDTT_SSH_PORT+x}" = "x" ] && SSH_PORT_SET=1
+DNS_SERVERS_SET=0; [ "${WDTT_DNS+x}" = "x" ] && DNS_SERVERS_SET=1
+ADMIN_ID_SET=0; [ "${WDTT_ADMIN_ID+x}" = "x" ] && ADMIN_ID_SET=1
+BOT_TOKEN_SET=0; [ "${WDTT_BOT_TOKEN+x}" = "x" ] && BOT_TOKEN_SET=1
+SOURCE_REPO_SET=0; [ "${WDTT_SOURCE_REPO+x}" = "x" ] && SOURCE_REPO_SET=1
+SOURCE_REF_SET=0; [ "${WDTT_SOURCE_REF+x}" = "x" ] && SOURCE_REF_SET=1
+GO_VERSION_SET=0; [ "${WDTT_GO_VERSION+x}" = "x" ] && GO_VERSION_SET=1
+NO_FIREWALL_SET=0; [ "${WDTT_NO_FIREWALL+x}" = "x" ] && NO_FIREWALL_SET=1
+
 log() { printf '[wdtt-setup] %s\n' "$*"; }
 die() { printf '[wdtt-setup] ERROR: %s\n' "$*" >&2; exit 1; }
+
+require_arg() {
+  [ "$#" -ge 2 ] || die "$1 requires a value."
+  case "$2" in
+    --*) die "$1 requires a value, got another option: $2" ;;
+  esac
+}
 
 usage() {
   cat <<'USAGE'
@@ -60,6 +81,7 @@ Main options:
   --source-ref REF      Branch, tag, or commit. Default: main.
   --go-version VERSION  Go version used if system Go is too old. Default: 1.25.0.
   --no-firewall         Do not install or apply iptables rules.
+  --with-firewall       Re-enable managed iptables rules after --no-firewall.
   --purge               With uninstall: remove /etc/wdtt too.
 
 Environment variables mirror the option names, for example:
@@ -79,103 +101,145 @@ parse_args() {
         exit 0
         ;;
       --password)
+        require_arg "$@"
         PASSWORD="${2:-}"
+        PASSWORD_SET=1
         shift 2
         ;;
       --password=*)
         PASSWORD="${1#*=}"
+        PASSWORD_SET=1
         shift
         ;;
       --vk-link|--vk-hash)
+        require_arg "$@"
         VK_LINK="${2:-}"
+        VK_LINK_SET=1
         shift 2
         ;;
       --vk-link=*|--vk-hash=*)
         VK_LINK="${1#*=}"
+        VK_LINK_SET=1
         shift
         ;;
       --host|--public-host|--domain)
+        require_arg "$@"
         PUBLIC_HOST="${2:-}"
+        PUBLIC_HOST_SET=1
         shift 2
         ;;
       --host=*|--public-host=*|--domain=*)
         PUBLIC_HOST="${1#*=}"
+        PUBLIC_HOST_SET=1
         shift
         ;;
       --dtls-port)
+        require_arg "$@"
         DTLS_PORT="${2:-}"
+        DTLS_PORT_SET=1
         shift 2
         ;;
       --dtls-port=*)
         DTLS_PORT="${1#*=}"
+        DTLS_PORT_SET=1
         shift
         ;;
       --wg-port)
+        require_arg "$@"
         WG_PORT="${2:-}"
+        WG_PORT_SET=1
         shift 2
         ;;
       --wg-port=*)
         WG_PORT="${1#*=}"
+        WG_PORT_SET=1
         shift
         ;;
       --ssh-port)
+        require_arg "$@"
         SSH_PORT="${2:-}"
+        SSH_PORT_SET=1
         shift 2
         ;;
       --ssh-port=*)
         SSH_PORT="${1#*=}"
+        SSH_PORT_SET=1
         shift
         ;;
       --dns)
+        require_arg "$@"
         DNS_SERVERS="${2:-}"
+        DNS_SERVERS_SET=1
         shift 2
         ;;
       --dns=*)
         DNS_SERVERS="${1#*=}"
+        DNS_SERVERS_SET=1
         shift
         ;;
       --admin-id)
+        require_arg "$@"
         ADMIN_ID="${2:-}"
+        ADMIN_ID_SET=1
         shift 2
         ;;
       --admin-id=*)
         ADMIN_ID="${1#*=}"
+        ADMIN_ID_SET=1
         shift
         ;;
       --bot-token)
+        require_arg "$@"
         BOT_TOKEN="${2:-}"
+        BOT_TOKEN_SET=1
         shift 2
         ;;
       --bot-token=*)
         BOT_TOKEN="${1#*=}"
+        BOT_TOKEN_SET=1
         shift
         ;;
       --source-repo|--repo)
+        require_arg "$@"
         SOURCE_REPO="${2:-}"
+        SOURCE_REPO_SET=1
         shift 2
         ;;
       --source-repo=*|--repo=*)
         SOURCE_REPO="${1#*=}"
+        SOURCE_REPO_SET=1
         shift
         ;;
       --source-ref|--ref)
+        require_arg "$@"
         SOURCE_REF="${2:-}"
+        SOURCE_REF_SET=1
         shift 2
         ;;
       --source-ref=*|--ref=*)
         SOURCE_REF="${1#*=}"
+        SOURCE_REF_SET=1
         shift
         ;;
       --go-version)
+        require_arg "$@"
         GO_VERSION="${2:-}"
+        GO_VERSION_SET=1
         shift 2
         ;;
       --go-version=*)
         GO_VERSION="${1#*=}"
+        GO_VERSION_SET=1
         shift
         ;;
       --no-firewall)
         NO_FIREWALL="1"
+        NO_FIREWALL_SET=1
+        shift
+        ;;
+      --with-firewall)
+        NO_FIREWALL="0"
+        NO_FIREWALL_SET=1
         shift
         ;;
       --purge)
@@ -210,14 +274,73 @@ validate_password() {
   fi
 }
 
+validate_no_whitespace() {
+  local name="$1" value="$2"
+  if printf '%s' "$value" | grep -q '[[:space:]]'; then
+    die "$name must not contain whitespace."
+  fi
+}
+
+validate_safe_value() {
+  local name="$1" value="$2"
+  [ -z "$value" ] && return 0
+  if ! printf '%s' "$value" | grep -Eq '^[A-Za-z0-9._:/,@+=-]*$'; then
+    die "$name contains unsupported characters."
+  fi
+}
+
+validate_abs_path() {
+  local name="$1" value="$2"
+  [ -n "$value" ] || die "$name must not be empty."
+  case "$value" in
+    /*) ;;
+    *) die "$name must be an absolute path, got: $value" ;;
+  esac
+  validate_no_whitespace "$name" "$value"
+}
+
+validate_safe_rm_path() {
+  local name="$1" value="$2" abs=""
+  validate_abs_path "$name" "$value"
+  abs="$(readlink -m -- "$value" 2>/dev/null || printf '%s' "$value")"
+  case "$abs" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/usr/bin|/usr/local|/usr/local/bin|/var)
+      die "$name points to a protected path: $abs"
+      ;;
+  esac
+}
+
 validate_inputs() {
   validate_port "WDTT_DTLS_PORT" "$DTLS_PORT"
   validate_port "WDTT_WG_PORT" "$WG_PORT"
   validate_port "WDTT_SSH_PORT" "$SSH_PORT"
   [ -n "$DNS_SERVERS" ] || die "DNS list must not be empty."
-  if printf '%s' "$DNS_SERVERS" | grep -q '[[:space:]]'; then
-    die "DNS list must not contain whitespace. Use comma-separated values."
+  validate_no_whitespace "WDTT_DNS" "$DNS_SERVERS"
+  [ -n "$SOURCE_REPO" ] || die "WDTT_SOURCE_REPO must not be empty."
+  [ -n "$SOURCE_REF" ] || die "WDTT_SOURCE_REF must not be empty."
+  validate_no_whitespace "WDTT_SOURCE_REPO" "$SOURCE_REPO"
+  validate_no_whitespace "WDTT_SOURCE_REF" "$SOURCE_REF"
+  validate_no_whitespace "WDTT_GO_VERSION" "$GO_VERSION"
+  validate_no_whitespace "WDTT_BOT_TOKEN" "$BOT_TOKEN"
+  validate_no_whitespace "WDTT_PUBLIC_HOST" "$PUBLIC_HOST"
+  validate_safe_value "WDTT_DNS" "$DNS_SERVERS"
+  validate_safe_value "WDTT_BOT_TOKEN" "$BOT_TOKEN"
+  validate_safe_value "WDTT_PUBLIC_HOST" "$PUBLIC_HOST"
+  validate_safe_value "WDTT_SOURCE_REPO" "$SOURCE_REPO"
+  validate_safe_value "WDTT_SOURCE_REF" "$SOURCE_REF"
+  validate_safe_value "WDTT_GO_VERSION" "$GO_VERSION"
+  if [ -n "$ADMIN_ID" ] && ! printf '%s' "$ADMIN_ID" | grep -Eq '^[0-9]+$'; then
+    die "WDTT_ADMIN_ID must be numeric."
   fi
+  case "$NO_FIREWALL" in 0|1) ;; *) die "WDTT_NO_FIREWALL must be 0 or 1." ;; esac
+  validate_safe_rm_path "WDTT_INSTALL_ROOT" "$WDTT_INSTALL_ROOT"
+  validate_safe_rm_path "WDTT_SOURCE_DIR" "$WDTT_SOURCE_DIR"
+  validate_safe_rm_path "WDTT_GO_ROOT" "$WDTT_GO_ROOT"
+  validate_safe_rm_path "WDTT_CONFIG_DIR" "$WDTT_CONFIG_DIR"
+  validate_safe_rm_path "WDTT_LIB_DIR" "$WDTT_LIB_DIR"
+  validate_abs_path "WDTT_BIN" "$WDTT_BIN"
+  validate_abs_path "WDTT_ENV_FILE" "$WDTT_ENV_FILE"
+  validate_abs_path "WDTT_FIREWALL_SCRIPT" "$WDTT_FIREWALL_SCRIPT"
 }
 
 load_env_file() {
@@ -225,16 +348,18 @@ load_env_file() {
   # The file is created by this installer and kept shell-compatible.
   # shellcheck disable=SC1090
   . "$WDTT_ENV_FILE"
-  [ -z "$PASSWORD" ] && PASSWORD="${WDTT_PASSWORD:-}"
-  [ -z "$PUBLIC_HOST" ] && PUBLIC_HOST="${WDTT_PUBLIC_HOST:-}"
-  DTLS_PORT="${WDTT_DTLS_PORT:-$DTLS_PORT}"
-  WG_PORT="${WDTT_WG_PORT:-$WG_PORT}"
-  SSH_PORT="${WDTT_SSH_PORT:-$SSH_PORT}"
-  DNS_SERVERS="${WDTT_DNS:-$DNS_SERVERS}"
-  ADMIN_ID="${WDTT_ADMIN_ID:-$ADMIN_ID}"
-  BOT_TOKEN="${WDTT_BOT_TOKEN:-$BOT_TOKEN}"
-  SOURCE_REPO="${WDTT_SOURCE_REPO:-$SOURCE_REPO}"
-  SOURCE_REF="${WDTT_SOURCE_REF:-$SOURCE_REF}"
+  [ "$PASSWORD_SET" = "0" ] && PASSWORD="${WDTT_PASSWORD:-$PASSWORD}"
+  [ "$PUBLIC_HOST_SET" = "0" ] && PUBLIC_HOST="${WDTT_PUBLIC_HOST:-$PUBLIC_HOST}"
+  [ "$DTLS_PORT_SET" = "0" ] && DTLS_PORT="${WDTT_DTLS_PORT:-$DTLS_PORT}"
+  [ "$WG_PORT_SET" = "0" ] && WG_PORT="${WDTT_WG_PORT:-$WG_PORT}"
+  [ "$SSH_PORT_SET" = "0" ] && SSH_PORT="${WDTT_SSH_PORT:-$SSH_PORT}"
+  [ "$DNS_SERVERS_SET" = "0" ] && DNS_SERVERS="${WDTT_DNS:-$DNS_SERVERS}"
+  [ "$ADMIN_ID_SET" = "0" ] && ADMIN_ID="${WDTT_ADMIN_ID:-$ADMIN_ID}"
+  [ "$BOT_TOKEN_SET" = "0" ] && BOT_TOKEN="${WDTT_BOT_TOKEN:-$BOT_TOKEN}"
+  [ "$SOURCE_REPO_SET" = "0" ] && SOURCE_REPO="${WDTT_SOURCE_REPO:-$SOURCE_REPO}"
+  [ "$SOURCE_REF_SET" = "0" ] && SOURCE_REF="${WDTT_SOURCE_REF:-$SOURCE_REF}"
+  [ "$GO_VERSION_SET" = "0" ] && GO_VERSION="${WDTT_GO_VERSION:-$GO_VERSION}"
+  [ "$NO_FIREWALL_SET" = "0" ] && NO_FIREWALL="${WDTT_NO_FIREWALL:-$NO_FIREWALL}"
 }
 
 detect_os() {
@@ -327,13 +452,18 @@ fetch_source() {
   else
     rm -rf "$WDTT_SOURCE_DIR"
     git clone "$SOURCE_REPO" "$WDTT_SOURCE_DIR"
+    git -C "$WDTT_SOURCE_DIR" fetch --tags --prune origin
   fi
 
-  if git -C "$WDTT_SOURCE_DIR" rev-parse --verify --quiet "$SOURCE_REF^{commit}" >/dev/null; then
+  if git -C "$WDTT_SOURCE_DIR" rev-parse --verify --quiet "refs/remotes/origin/$SOURCE_REF^{commit}" >/dev/null; then
+    git -C "$WDTT_SOURCE_DIR" checkout --force -B "$SOURCE_REF" "refs/remotes/origin/$SOURCE_REF"
+  elif git -C "$WDTT_SOURCE_DIR" rev-parse --verify --quiet "refs/tags/$SOURCE_REF^{commit}" >/dev/null; then
+    git -C "$WDTT_SOURCE_DIR" checkout --force "refs/tags/$SOURCE_REF"
+  elif git -C "$WDTT_SOURCE_DIR" rev-parse --verify --quiet "$SOURCE_REF^{commit}" >/dev/null; then
     git -C "$WDTT_SOURCE_DIR" checkout --force "$SOURCE_REF"
   else
-    git -C "$WDTT_SOURCE_DIR" fetch --depth=1 origin "$SOURCE_REF" || true
-    git -C "$WDTT_SOURCE_DIR" checkout --force "$SOURCE_REF" 2>/dev/null || git -C "$WDTT_SOURCE_DIR" checkout --force FETCH_HEAD
+    git -C "$WDTT_SOURCE_DIR" fetch --depth=1 origin "$SOURCE_REF"
+    git -C "$WDTT_SOURCE_DIR" checkout --force FETCH_HEAD
   fi
   local source_commit
   source_commit="$(git -C "$WDTT_SOURCE_DIR" rev-parse --short HEAD)"
@@ -372,6 +502,7 @@ WDTT_BOT_TOKEN=$BOT_TOKEN
 WDTT_PUBLIC_HOST=$PUBLIC_HOST
 WDTT_SOURCE_REPO=$SOURCE_REPO
 WDTT_SOURCE_REF=$SOURCE_REF
+WDTT_NO_FIREWALL=$NO_FIREWALL
 WDTT_SUBNET=10.66.66.0/24
 WDTT_IFACE=wdtt0
 WDTT_IPT_COMMENT=WDTT_SETUP
@@ -380,7 +511,6 @@ EOF
 }
 
 write_firewall_script() {
-  [ "$NO_FIREWALL" = "1" ] && return 0
   log "Writing firewall helper: $WDTT_FIREWALL_SCRIPT"
   mkdir -p "$WDTT_LIB_DIR"
   cat > "$WDTT_FIREWALL_SCRIPT" <<EOF
@@ -396,6 +526,7 @@ SSH="\${WDTT_SSH_PORT:-22}"
 IFACE="\${WDTT_IFACE:-wdtt0}"
 SUBNET="\${WDTT_SUBNET:-10.66.66.0/24}"
 COMMENT="\${WDTT_IPT_COMMENT:-WDTT_SETUP}"
+NO_FIREWALL="\${WDTT_NO_FIREWALL:-0}"
 
 wan_iface() {
   ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i=="dev") {print \$(i+1); exit}}'
@@ -433,6 +564,10 @@ add_mss_clamp() {
   iptables -t mangle -C FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
     iptables -t mangle -I FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 }
+
+if [ "\$NO_FIREWALL" = "1" ]; then
+  exit 0
+fi
 
 command -v iptables >/dev/null 2>&1 || exit 0
 add_input_udp "\$DTLS"
@@ -495,7 +630,10 @@ EOF
 start_services() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl not found. This installer requires systemd."
   systemctl daemon-reload
-  if [ "$NO_FIREWALL" != "1" ]; then
+  if [ "$NO_FIREWALL" = "1" ]; then
+    systemctl disable --now wdtt-firewall.service >/dev/null 2>&1 || true
+    cleanup_firewall_rules
+  else
     systemctl enable --now wdtt-firewall.service >/dev/null
   fi
   systemctl enable wdtt.service >/dev/null
