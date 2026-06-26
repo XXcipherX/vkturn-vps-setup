@@ -214,7 +214,7 @@ sudo /tmp/vkturn-install.sh uninstall --purge
 ```text
 --password / WDTT_PASSWORD       главный пароль WDTT
 --vk-link / WDTT_VK_LINK         VK call URL или чистый hash
---host / WDTT_PUBLIC_HOST        IP или домен для ссылки iOS
+--host / WDTT_PUBLIC_HOST        IP или домен для ссылки iOS, без схемы и порта
 --dtls-port / WDTT_DTLS_PORT     публичный UDP-порт, default 56000
 --wg-port / WDTT_WG_PORT         внутренний WG UDP-порт, default 56001
 --ssh-port / WDTT_SSH_PORT       SSH TCP-порт, default 22
@@ -327,7 +327,7 @@ Bootstrap timeout на iOS
 ```bash
 sudo /tmp/vkturn-install.sh install \
   --password "$WDTT_PASS" \
-  --source-ref "main"
+  --source-ref "b154ce94d7a85c862bf1f301e75966a1b71a9b86"
 ```
 
 При повторном запуске:

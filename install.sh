@@ -289,6 +289,13 @@ validate_safe_value() {
   fi
 }
 
+validate_public_host() {
+  [ -z "$PUBLIC_HOST" ] && return 0
+  if ! printf '%s' "$PUBLIC_HOST" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    die "WDTT_PUBLIC_HOST must be an IPv4 address or domain without scheme, path or port."
+  fi
+}
+
 validate_abs_path() {
   local name="$1" value="$2"
   [ -n "$value" ] || die "$name must not be empty."
@@ -326,6 +333,7 @@ validate_inputs() {
   validate_safe_value "WDTT_DNS" "$DNS_SERVERS"
   validate_safe_value "WDTT_BOT_TOKEN" "$BOT_TOKEN"
   validate_safe_value "WDTT_PUBLIC_HOST" "$PUBLIC_HOST"
+  validate_public_host
   validate_safe_value "WDTT_SOURCE_REPO" "$SOURCE_REPO"
   validate_safe_value "WDTT_SOURCE_REF" "$SOURCE_REF"
   validate_safe_value "WDTT_GO_VERSION" "$GO_VERSION"
@@ -490,8 +498,9 @@ build_server() {
 write_env_file() {
   log "Writing $WDTT_ENV_FILE"
   mkdir -p "$WDTT_CONFIG_DIR"
-  umask 077
-  cat > "$WDTT_ENV_FILE" <<EOF
+  (
+    umask 077
+    cat > "$WDTT_ENV_FILE" <<EOF
 WDTT_PASSWORD=$PASSWORD
 WDTT_DTLS_PORT=$DTLS_PORT
 WDTT_WG_PORT=$WG_PORT
@@ -507,6 +516,7 @@ WDTT_SUBNET=10.66.66.0/24
 WDTT_IFACE=wdtt0
 WDTT_IPT_COMMENT=WDTT_SETUP
 EOF
+  )
   chmod 600 "$WDTT_ENV_FILE"
 }
 
@@ -650,7 +660,13 @@ strip_vk_hash() {
   local s="$1"
   s="${s%%\?*}"
   s="${s%%#*}"
+  while [ "${s%/}" != "$s" ]; do
+    s="${s%/}"
+  done
   s="${s##*/}"
+  case "$s" in
+    ''|call|join) s="" ;;
+  esac
   printf '%s' "$s"
 }
 
