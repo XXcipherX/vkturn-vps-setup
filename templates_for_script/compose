@@ -1,0 +1,15 @@
+services:
+  wdtt:
+    image: $WDTT_DOCKER_IMAGE
+    container_name: wdtt
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ./.env
+    volumes:
+      - ./data:/etc/wdtt
+      - ./run-wdtt.sh:/usr/local/bin/run-wdtt.sh:ro
+    entrypoint: ["/usr/local/bin/run-wdtt.sh"]

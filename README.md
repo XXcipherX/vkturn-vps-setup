@@ -89,6 +89,47 @@ wdtt://VPS_IP:56000:56001:9000:PASSWORD:VK_HASH
 Settings -> Import from connection link
 ```
 
+## Docker-установка
+
+Если хочешь запускать WDTT как Docker Compose stack, используй отдельный установщик:
+
+```bash
+git clone https://github.com/XXcipherX/vkturn-vps-setup.git
+cd vkturn-vps-setup
+sudo bash vps-setup.sh
+```
+
+Он установит Docker при необходимости, скачает готовый image `ghcr.io/xxcipherx/wdtt-server:latest` и запишет stack в:
+
+```text
+/opt/vkturn-vps-setup/docker-compose.yml
+/opt/vkturn-vps-setup/.env
+/opt/vkturn-vps-setup/run-wdtt.sh
+/opt/vkturn-vps-setup/data/
+```
+
+`docker-compose.yml`, `.env` и `run-wdtt.sh` генерируются из файлов в `templates_for_script`.
+
+Если нужен другой тег или свой registry, можно переопределить image:
+
+```bash
+sudo WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest bash vps-setup.sh
+```
+
+Контейнер запускается с `network_mode: host`, `privileged: true` и доступом к `/dev/net/tun`, потому что WDTT создает WireGuard-интерфейс и настраивает NAT. По умолчанию compose сам добавляет host `iptables` правила с комментарием `WDTT_DOCKER`; если firewall хочешь вести вручную, на вопрос `Manage host iptables/NAT rules for WDTT?` ответь `n`.
+
+Команды после установки:
+
+```bash
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml ps
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml logs -f
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml pull
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml restart
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
+```
+
+Обычный `install.sh` с `systemd` остается основным вариантом для чистого VPS. Docker-вариант удобен, если тебе привычнее compose-структура и обновление через готовый Docker image.
+
 ## Настройка iOS вручную
 
 Если не используешь импорт ссылки, заполни в iOS-приложении:
