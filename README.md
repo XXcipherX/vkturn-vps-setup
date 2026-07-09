@@ -173,6 +173,7 @@ sudo bash free-turn-setup.sh
 /opt/free-turn-proxy/.env
 /opt/free-turn-proxy/clients.json
 /opt/free-turn-proxy/wireguard-client.conf
+/opt/free-turn-proxy/clients/<client-id>.conf
 /etc/wireguard/wgfreeturn.conf
 /etc/systemd/system/free-turn-proxy-firewall.service
 ```
@@ -207,10 +208,14 @@ sudo bash free-turn-setup.sh --restart
 sudo bash free-turn-setup.sh --update
 sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash>
 sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash> --client-id <client-id>
+sudo bash free-turn-setup.sh --print-qr https://vk.com/call/join/<hash> --client-id <client-id>
 sudo bash free-turn-setup.sh --list-clients
 sudo bash free-turn-setup.sh --add-client
 sudo bash free-turn-setup.sh --remove-client <client-id>
+sudo bash free-turn-setup.sh --rotate-obf-key https://vk.com/call/join/<hash>
 ```
+
+`--add-client` создает полноценного отдельного клиента: новый `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовую iOS-ссылку.
 
 При повторном запуске установщик переиспользует существующие WireGuard-ключи. Чтобы явно пересоздать ключи, запусти установку с `--rotate-keys`.
 

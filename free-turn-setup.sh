@@ -6,6 +6,7 @@ trap 'echo "Error on line $LINENO. Exit code: $?" >&2' ERR
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="${FREE_TURN_INSTALL_DIR:-/opt/free-turn-proxy}"
 TEMPLATE_DIR="$SCRIPT_DIR/templates_for_script"
+WG_DIR="${FREE_TURN_WG_DIR:-/etc/wireguard}"
 export DEBIAN_FRONTEND=noninteractive
 
 FREE_TURN_IMAGE="${FREE_TURN_IMAGE:-ghcr.io/samosvalishe/free-turn-proxy:latest}"
@@ -60,6 +61,7 @@ usage() {
 Usage:
   sudo bash free-turn-setup.sh
   sudo bash free-turn-setup.sh --print-link [vk-link-or-hash]
+  sudo bash free-turn-setup.sh --print-qr [vk-link-or-hash]
   sudo bash free-turn-setup.sh --add-client [client-id]
   sudo bash free-turn-setup.sh --remove-client <client-id>
   sudo bash free-turn-setup.sh --list-clients
@@ -67,6 +69,7 @@ Usage:
   sudo bash free-turn-setup.sh --logs
   sudo bash free-turn-setup.sh --restart
   sudo bash free-turn-setup.sh --update
+  sudo bash free-turn-setup.sh --rotate-obf-key [vk-link-or-hash]
 
 Options:
   --vk-link <value>       VK call link/hash for generated iOS import link.
@@ -86,6 +89,14 @@ parse_args() {
     case "$1" in
       --print-link)
         ACTION="print-link"
+        shift
+        if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+          FREE_TURN_VK_LINK="$1"
+          shift
+        fi
+        ;;
+      --print-qr)
+        ACTION="print-qr"
         shift
         if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
           FREE_TURN_VK_LINK="$1"
@@ -125,6 +136,14 @@ parse_args() {
       --update)
         ACTION="update"
         shift
+        ;;
+      --rotate-obf-key)
+        ACTION="rotate-obf-key"
+        shift
+        if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+          FREE_TURN_VK_LINK="$1"
+          shift
+        fi
         ;;
       --vk-link)
         require_arg "$1" "${2:-}"
@@ -285,6 +304,19 @@ clients_file() {
   printf '%s/clients.json' "$INSTALL_DIR"
 }
 
+clients_dir() {
+  printf '%s/clients' "$INSTALL_DIR"
+}
+
+client_conf_file() {
+  local id="$1"
+  printf '%s/%s.conf' "$(clients_dir)" "$id"
+}
+
+server_wg_conf_file() {
+  printf '%s/%s.conf' "$WG_DIR" "$FREE_TURN_WG_IFACE"
+}
+
 read_env_value() {
   local key="$1" file="${2:-$(env_file)}"
   [ -f "$file" ] || return 1
@@ -310,6 +342,17 @@ read_conf_value() {
     }
     END { exit found ? 0 : 1 }
   ' "$file"
+}
+
+set_env_value() {
+  local key="$1" value="$2" file="${3:-$(env_file)}"
+  [ -f "$file" ] || die "Env file not found: $file"
+  if grep -Eq "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+  chmod 600 "$file"
 }
 
 read_client_ids() {
@@ -365,6 +408,161 @@ restart_compose_if_available() {
   docker compose -f "$compose" up -d --force-recreate >/dev/null 2>&1 || true
 }
 
+client_id_exists() {
+  local id="$1"
+  read_client_ids "$(clients_file)" | grep -Fxq "$id"
+}
+
+add_client_id_to_allowlist() {
+  local id="$1" ids existing
+  ids=()
+  if [ -f "$(clients_file)" ]; then
+    while IFS= read -r existing; do
+      ids+=("$existing")
+    done < <(read_client_ids "$(clients_file)")
+  fi
+  ids+=("$id")
+  write_client_ids "$(clients_file)" "${ids[@]}"
+  enable_clients_file_in_env
+}
+
+remove_client_id_from_allowlist() {
+  local id="$1" ids existing removed
+  [ -f "$(clients_file)" ] || die "Clients file not found: $(clients_file)"
+  ids=()
+  removed=0
+  while IFS= read -r existing; do
+    if [ "$existing" = "$id" ]; then
+      removed=1
+      continue
+    fi
+    ids+=("$existing")
+  done < <(read_client_ids "$(clients_file)")
+  [ "$removed" -eq 1 ] || die "Client ID not found: $id"
+  write_client_ids "$(clients_file)" "${ids[@]}"
+}
+
+wg_public_from_private() {
+  printf '%s' "$1" | wg pubkey
+}
+
+server_wg_address() {
+  local conf addr
+  conf="$(server_wg_conf_file)"
+  addr="$(read_conf_value "$conf" "Address" || true)"
+  printf '%s' "${addr%%/*}"
+}
+
+next_client_address() {
+  local conf server_ip prefix used_octets octet
+  conf="$(server_wg_conf_file)"
+  [ -f "$conf" ] || die "WireGuard server config not found: $conf"
+  server_ip="$(server_wg_address)"
+  [ -n "$server_ip" ] || die "Could not read WireGuard server address."
+  prefix="${server_ip%.*}"
+
+  used_octets="$(awk -F= -v prefix="$prefix" '
+    $1 ~ /^[[:space:]]*AllowedIPs[[:space:]]*$/ {
+      value=$2
+      gsub(/[[:space:]]/, "", value)
+      split(value, parts, ",")
+      for (i in parts) {
+        addr=parts[i]
+        if (index(addr, prefix ".") == 1 && addr ~ /\/32$/) {
+          addr=substr(addr, length(prefix) + 2)
+          sub("/32$", "", addr)
+          if (addr ~ /^[0-9]+$/) print addr
+        }
+      }
+    }
+  ' "$conf")"
+
+  for octet in $(seq 2 254); do
+    if ! printf '%s\n' "$used_octets" | grep -Fxq "$octet"; then
+      printf '%s.%s' "$prefix" "$octet"
+      return 0
+    fi
+  done
+  die "No free WireGuard client IPs left in $prefix.0/24."
+}
+
+append_wg_peer() {
+  local id="$1" public_key="$2" address="$3" conf
+  conf="$(server_wg_conf_file)"
+  [ -f "$conf" ] || die "WireGuard server config not found: $conf"
+  if grep -Fq "$public_key" "$conf"; then
+    return 0
+  fi
+  {
+    printf '\n[Peer]\n'
+    printf '# free-turn-client: %s\n' "$id"
+    printf 'PublicKey = %s\n' "$public_key"
+    printf 'AllowedIPs = %s/32\n' "$address"
+  } >> "$conf"
+  chmod 600 "$conf"
+}
+
+remove_wg_peer_by_public_key() {
+  local public_key="$1" conf tmp
+  conf="$(server_wg_conf_file)"
+  [ -f "$conf" ] || die "WireGuard server config not found: $conf"
+  tmp="$conf.tmp.$$"
+  awk -v pub="$public_key" '
+    function flush() {
+      if (in_peer && keep) {
+        printf "%s", block
+      }
+      block=""
+      in_peer=0
+      keep=1
+    }
+    BEGIN { in_peer=0; keep=1; block="" }
+    /^\[Peer\][[:space:]]*$/ {
+      flush()
+      in_peer=1
+      keep=1
+      block=$0 ORS
+      next
+    }
+    /^\[/ {
+      flush()
+      print
+      next
+    }
+    {
+      if (in_peer) {
+        block=block $0 ORS
+        line=$0
+        sub(/^[[:space:]]*/, "", line)
+        if (line ~ /^PublicKey[[:space:]]*=/) {
+          sub(/^PublicKey[[:space:]]*=[[:space:]]*/, "", line)
+          sub(/[[:space:]]*$/, "", line)
+          if (line == pub) keep=0
+        }
+      } else {
+        print
+      }
+    }
+    END { flush() }
+  ' "$conf" > "$tmp"
+  mv "$tmp" "$conf"
+  chmod 600 "$conf"
+}
+
+apply_wg_peer_runtime() {
+  local public_key="$1" address="$2"
+  command -v wg >/dev/null 2>&1 || return 0
+  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || return 0
+  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" allowed-ips "$address/32" || true
+}
+
+remove_wg_peer_runtime() {
+  local public_key="$1"
+  command -v wg >/dev/null 2>&1 || return 0
+  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || return 0
+  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" remove || true
+}
+
 write_clients_file() {
   local path ids id
   path="$(clients_file)"
@@ -382,6 +580,36 @@ write_clients_file() {
   else
     FREE_TURN_CLIENTS_FILE=""
     write_client_ids "$path"
+  fi
+}
+
+write_client_wg_conf() {
+  local id="$1" private_key="$2" address="$3" path="$4"
+  mkdir -p "$(dirname "$path")"
+  export FREE_TURN_WG_CLIENT_PRIVATE_KEY="$private_key"
+  export FREE_TURN_WG_CLIENT_ADDRESS="$address"
+  export FREE_TURN_WG_DNS FREE_TURN_WG_SERVER_PUBLIC_KEY FREE_TURN_WG_CLIENT_ENDPOINT
+  envsubst '$FREE_TURN_WG_CLIENT_PRIVATE_KEY $FREE_TURN_WG_CLIENT_ADDRESS $FREE_TURN_WG_DNS $FREE_TURN_WG_SERVER_PUBLIC_KEY $FREE_TURN_WG_CLIENT_ENDPOINT' \
+    < "$TEMPLATE_DIR/free-turn-client-wg.conf" \
+    > "$path"
+  chmod 600 "$path"
+}
+
+ensure_client_store() {
+  local default_id legacy_conf stored_conf
+  mkdir -p "$(clients_dir)"
+
+  default_id="$FREE_TURN_CLIENT_ID"
+  if [ -z "$default_id" ]; then
+    default_id="$(read_client_ids "$(clients_file)" | head -n 1 || true)"
+  fi
+  [ -n "$default_id" ] || return 0
+
+  legacy_conf="$INSTALL_DIR/wireguard-client.conf"
+  stored_conf="$(client_conf_file "$default_id")"
+  if [ -f "$legacy_conf" ] && [ ! -f "$stored_conf" ]; then
+    cp "$legacy_conf" "$stored_conf"
+    chmod 600 "$stored_conf"
   fi
 }
 
@@ -407,12 +635,11 @@ write_compose_stack() {
 setup_wireguard_backend() {
   [ "$FREE_TURN_SETUP_WG" = "1" ] || return 0
 
-  local wg_dir="/etc/wireguard"
   local server_conf client_conf server_priv server_pub client_priv client_pub wan
-  mkdir -p "$wg_dir" "$INSTALL_DIR"
-  chmod 700 "$wg_dir"
+  mkdir -p "$WG_DIR" "$INSTALL_DIR"
+  chmod 700 "$WG_DIR"
 
-  server_conf="$wg_dir/$FREE_TURN_WG_IFACE.conf"
+  server_conf="$WG_DIR/$FREE_TURN_WG_IFACE.conf"
   client_conf="$INSTALL_DIR/wireguard-client.conf"
   if [ "$ROTATE_WG_KEYS" != "1" ] && [ -f "$server_conf" ] && [ -f "$client_conf" ]; then
     server_priv="$(read_conf_value "$server_conf" "PrivateKey" || true)"
@@ -459,6 +686,7 @@ setup_wireguard_backend() {
     < "$TEMPLATE_DIR/free-turn-client-wg.conf" \
     > "$client_conf"
   chmod 600 "$client_conf"
+  ensure_client_store
 
   sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
   systemctl enable --now "wg-quick@$FREE_TURN_WG_IFACE"
@@ -565,7 +793,11 @@ load_existing_stack_config() {
 
 load_existing_wireguard_config() {
   local client_conf addr value
-  client_conf="$INSTALL_DIR/wireguard-client.conf"
+  ensure_client_store
+  client_conf="$(client_conf_file "$FREE_TURN_CLIENT_ID")"
+  if [ ! -f "$client_conf" ] && [ "$FREE_TURN_CLIENT_ID_OVERRIDE" != "1" ]; then
+    client_conf="$INSTALL_DIR/wireguard-client.conf"
+  fi
   [ -f "$client_conf" ] || die "WireGuard client config not found: $client_conf"
 
   FREE_TURN_WG_CLIENT_PRIVATE_KEY="$(read_conf_value "$client_conf" "PrivateKey" || true)"
@@ -651,51 +883,142 @@ print_summary() {
 }
 
 add_client_command() {
-  local id path ids existing
+  local id client_priv client_pub client_addr server_conf server_priv client_conf next_id
   [ -f "$(compose_file)" ] || die "Installed compose file not found: $(compose_file)"
+  load_existing_stack_config
+  [ "$FREE_TURN_SETUP_WG" = "1" ] || die "--add-client requires the local WireGuard backend setup."
+  command -v wg >/dev/null 2>&1 || die "wireguard-tools is required for --add-client."
+  [ -f "$TEMPLATE_DIR/free-turn-client-wg.conf" ] || die "Missing required template: free-turn-client-wg.conf"
+  ensure_client_store
+
   id="${1:-}"
   if [ -z "$id" ]; then
     id="$(openssl rand -hex 16)"
   fi
   valid_client_id "$id" || die "Invalid Client ID: $id"
-
-  path="$(clients_file)"
-  ids=()
-  if [ -f "$path" ]; then
-    while IFS= read -r existing; do
-      ids+=("$existing")
-    done < <(read_client_ids "$path")
+  if client_id_exists "$id" || [ -f "$(client_conf_file "$id")" ]; then
+    die "Client already exists: $id"
   fi
-  ids+=("$id")
-  write_client_ids "$path" "${ids[@]}"
-  enable_clients_file_in_env
+
+  server_conf="$(server_wg_conf_file)"
+  server_priv="$(read_conf_value "$server_conf" "PrivateKey" || true)"
+  [ -n "$server_priv" ] || die "Could not read WireGuard server private key."
+  FREE_TURN_WG_SERVER_PUBLIC_KEY="$(wg_public_from_private "$server_priv")"
+
+  client_priv="$(wg genkey)"
+  client_pub="$(wg_public_from_private "$client_priv")"
+  client_addr="$(next_client_address)"
+  client_conf="$(client_conf_file "$id")"
+
+  write_client_wg_conf "$id" "$client_priv" "$client_addr" "$client_conf"
+  append_wg_peer "$id" "$client_pub" "$client_addr"
+  apply_wg_peer_runtime "$client_pub" "$client_addr"
+  add_client_id_to_allowlist "$id"
   restart_compose_if_available
 
-  echo "Client ID added:"
-  echo "$id"
+  FREE_TURN_CLIENT_ID="$id"
+  FREE_TURN_WG_CLIENT_PRIVATE_KEY="$client_priv"
+  FREE_TURN_WG_CLIENT_ADDRESS="$client_addr"
+  next_id="$(read_client_ids "$(clients_file)" | head -n 1 || true)"
+  if [ -n "$next_id" ]; then
+    set_env_value FREE_TURN_CLIENT_ID "$next_id"
+  fi
+
+  echo "Client added:"
+  echo "  Client ID: $id"
+  echo "  WireGuard address: $client_addr/32"
+  echo "  WireGuard config: $client_conf"
+  echo
+  if [ "$FREE_TURN_OBF_PROFILE" != "none" ]; then
+    echo "iOS import link:"
+    echo "$(build_ios_connection_link)"
+  else
+    echo "iOS import link skipped: SRTP-WRAP-S import requires rtpopus, rtpopus2 or rtpopus3."
+  fi
 }
 
 remove_client_command() {
-  local id path ids existing removed
+  local id conf legacy_conf client_priv client_pub first_remaining legacy_priv
+  load_existing_stack_config
+  [ "$FREE_TURN_SETUP_WG" = "1" ] || die "--remove-client requires the local WireGuard backend setup."
+  command -v wg >/dev/null 2>&1 || die "wireguard-tools is required for --remove-client."
+  ensure_client_store
+
   id="$1"
   valid_client_id "$id" || die "Invalid Client ID: $id"
-  path="$(clients_file)"
-  [ -f "$path" ] || die "Clients file not found: $path"
+  client_id_exists "$id" || die "Client ID not found: $id"
+  conf="$(client_conf_file "$id")"
+  [ -f "$conf" ] || die "WireGuard client config not found: $conf"
 
-  ids=()
-  removed=0
-  while IFS= read -r existing; do
-    if [ "$existing" = "$id" ]; then
-      removed=1
-      continue
+  client_priv="$(read_conf_value "$conf" "PrivateKey" || true)"
+  [ -n "$client_priv" ] || die "Could not read client private key: $conf"
+  client_pub="$(wg_public_from_private "$client_priv")"
+
+  remove_wg_peer_by_public_key "$client_pub"
+  remove_wg_peer_runtime "$client_pub"
+  remove_client_id_from_allowlist "$id"
+
+  legacy_conf="$INSTALL_DIR/wireguard-client.conf"
+  if [ -f "$legacy_conf" ]; then
+    legacy_priv="$(read_conf_value "$legacy_conf" "PrivateKey" || true)"
+    if [ "$legacy_priv" = "$client_priv" ]; then
+      rm -f "$legacy_conf"
     fi
-    ids+=("$existing")
-  done < <(read_client_ids "$path")
+  fi
+  rm -f "$conf"
 
-  [ "$removed" -eq 1 ] || die "Client ID not found: $id"
-  write_client_ids "$path" "${ids[@]}"
+  first_remaining="$(read_client_ids "$(clients_file)" | head -n 1 || true)"
+  if [ -n "$first_remaining" ]; then
+    set_env_value FREE_TURN_CLIENT_ID "$first_remaining"
+  else
+    set_env_value FREE_TURN_CLIENT_ID ""
+  fi
+
   restart_compose_if_available
-  echo "Client ID removed: $id"
+  echo "Client removed: $id"
+}
+
+ensure_qrencode() {
+  if command -v qrencode >/dev/null 2>&1; then
+    return 0
+  fi
+  log "Installing qrencode..."
+  apt-get update
+  apt-get install -y qrencode
+}
+
+print_qr_command() {
+  local link
+  load_existing_stack_config
+  load_existing_wireguard_config
+  validate_link_config
+  link="$(build_ios_connection_link)"
+  echo "iOS import link:"
+  echo "$link"
+  echo
+  ensure_qrencode
+  printf '%s' "$link" | qrencode -t ansiutf8
+}
+
+rotate_obf_key_command() {
+  local new_key
+  load_existing_stack_config
+  new_key="$(openssl rand -hex 32)"
+  set_env_value OBF_KEY "$new_key"
+  FREE_TURN_OBF_KEY="$new_key"
+  restart_compose_if_available
+
+  echo "OBF key rotated."
+  echo "New OBF key: $new_key"
+  echo "Existing iOS import links must be re-generated."
+
+  if [ "$FREE_TURN_SETUP_WG" = "1" ] && [ "$FREE_TURN_OBF_PROFILE" != "none" ]; then
+    echo
+    load_existing_wireguard_config
+    validate_link_config
+    echo "iOS import link:"
+    echo "$(build_ios_connection_link)"
+  fi
 }
 
 list_clients_command() {
@@ -716,8 +1039,12 @@ check_item() {
   fi
 }
 
+warn_item() {
+  printf '  WARN %s\n' "$1"
+}
+
 health_check() {
-  local failed compose listen_port firewall_service
+  local failed compose listen_port firewall_service backend_port
   failed=0
   compose="$(compose_file)"
   listen_port="$FREE_TURN_LISTEN_PORT"
@@ -731,6 +1058,10 @@ health_check() {
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
     check_item "WireGuard service is active" systemctl is-active --quiet "wg-quick@$FREE_TURN_WG_IFACE" || failed=1
     check_item "IPv4 forwarding is enabled" bash -c '[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ]' || failed=1
+    backend_port="${FREE_TURN_CONNECT_ADDR##*:}"
+    if ss -H -lun 2>/dev/null | grep -Eq "(^|[[:space:]])([^[:space:]]*:)?${backend_port}[[:space:]]"; then
+      warn_item "backend WireGuard UDP port $backend_port is listening; keep it closed in provider/firewall rules"
+    fi
   fi
   check_item "clients.json exists" test -f "$(clients_file)" || failed=1
   if systemctl list-unit-files "$firewall_service" --no-legend 2>/dev/null | grep -q "$firewall_service"; then
@@ -792,6 +1123,9 @@ main() {
     print-link)
       print_link_command
       ;;
+    print-qr)
+      print_qr_command
+      ;;
     add-client)
       add_client_command "$ACTION_ARG"
       ;;
@@ -812,6 +1146,9 @@ main() {
       ;;
     update)
       update_command
+      ;;
+    rotate-obf-key)
+      rotate_obf_key_command
       ;;
     *)
       die "Unsupported action: $ACTION"
