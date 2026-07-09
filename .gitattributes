@@ -2,4 +2,5 @@
 *.sh text eol=lf
 *.md text eol=lf
 *.example text eol=lf
+templates_for_script/* text eol=lf
 LICENSE text eol=lf

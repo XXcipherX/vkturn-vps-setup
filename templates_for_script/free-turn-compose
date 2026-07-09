@@ -1,0 +1,10 @@
+services:
+  free-turn-proxy:
+    image: "$FREE_TURN_IMAGE"
+    container_name: free-turn-proxy
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./.env
+    volumes:
+      - ./clients.json:/app/clients.json:ro

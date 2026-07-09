@@ -130,6 +130,87 @@ sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
 
 Обычный `install.sh` с `systemd` остается основным вариантом для чистого VPS. Docker-вариант удобен, если тебе привычнее compose-структура и обновление через готовый Docker image.
 
+## Free Turn Proxy / SRTP-WRAP-S
+
+В репозитории есть установщик для `samosvalishe/free-turn-proxy`, который нужен iOS-приложению в режиме **SRTP-WRAP-S**. Это другой серверный режим, не совместимый с `wdtt://`.
+
+Схема:
+
+```text
+iPhone vk-turn-proxy-ios
+  -> VK TURN relay
+  -> SRTP-WRAP-S / DTLS
+  -> free-turn-proxy on VPS
+  -> local backend on VPS, usually WireGuard wgfreeturn
+  -> NAT
+  -> Internet
+```
+
+В отличие от WDTT, `free-turn-proxy` сам не выдает WireGuard-конфиг через `GETCONF`. Он прокидывает трафик в backend. Поэтому установщик по умолчанию поднимает локальный WireGuard backend `wgfreeturn` и сохраняет клиентский конфиг в `/opt/free-turn-proxy/wireguard-client.conf`.
+
+Запуск:
+
+```bash
+git clone https://github.com/XXcipherX/vkturn-vps-setup.git
+cd vkturn-vps-setup
+sudo bash free-turn-setup.sh
+```
+
+По умолчанию скрипт:
+
+- ставит Docker и `wireguard-tools`;
+- скачивает image `ghcr.io/samosvalishe/free-turn-proxy:latest`;
+- генерирует `OBF_KEY`;
+- генерирует `Client ID` и включает allowlist через `clients.json`;
+- поднимает `free-turn-proxy` в Docker Compose с `network_mode: host`;
+- поднимает локальный WireGuard backend `wgfreeturn` на `127.0.0.1:51820`;
+- печатает готовую iOS-ссылку `vkturnproxy://import?...` и отдельные значения для режима `SRTP-WRAP-S`.
+
+После установки основные файлы находятся здесь:
+
+```text
+/opt/free-turn-proxy/docker-compose.yml
+/opt/free-turn-proxy/.env
+/opt/free-turn-proxy/clients.json
+/opt/free-turn-proxy/wireguard-client.conf
+/etc/wireguard/wgfreeturn.conf
+/etc/systemd/system/free-turn-proxy-firewall.service
+```
+
+Если скрипт поднимает локальный WireGuard backend, в конце установки он напечатает готовую ссылку:
+
+```text
+iOS import link:
+vkturnproxy://import?data=...
+```
+
+Чтобы ссылка была готовой без ручного редактирования, при установке укажи `VK call link/hash`. Если оставить поле пустым, в ссылке будет плейсхолдер `VK_HASH`.
+
+Ее можно импортировать в iOS-приложение сразу целиком. Если используешь внешний backend или хочешь заполнить поля вручную, укажи:
+
+```text
+Server mode: SRTP-WRAP-S
+Peer address: <VPS_IP>:56000
+OBF profile: значение, которое напечатал скрипт, default rtpopus3
+OBF key: ключ, который напечатал скрипт
+Client ID: ID, который напечатал скрипт
+WireGuard config: /opt/free-turn-proxy/wireguard-client.conf
+VK link: https://vk.com/call/join/<hash>
+```
+
+Команды управления:
+
+```bash
+sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml ps
+sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml logs -f
+sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml pull
+sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml up -d
+sudo systemctl status wg-quick@wgfreeturn --no-pager
+sudo systemctl status free-turn-proxy-firewall --no-pager
+```
+
+Если у тебя уже есть WireGuard, AmneziaWG или TCP backend на VPS, на вопрос `Create local WireGuard backend on this VPS?` ответь `n` и укажи свой `host:port` в `Existing backend address`.
+
 ## Настройка iOS вручную
 
 Если не используешь импорт ссылки, заполни в iOS-приложении:

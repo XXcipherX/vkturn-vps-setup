@@ -1,0 +1,13 @@
+[Unit]
+Description=Free Turn Proxy firewall rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=$FREE_TURN_INSTALL_DIR/.env
+ExecStart=/usr/local/lib/free-turn-proxy/apply-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
