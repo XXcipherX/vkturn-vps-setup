@@ -201,13 +201,18 @@ VK link: https://vk.com/call/join/<hash>
 Команды управления:
 
 ```bash
-sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml ps
-sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml logs -f
-sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml pull
-sudo docker compose -f /opt/free-turn-proxy/docker-compose.yml up -d
-sudo systemctl status wg-quick@wgfreeturn --no-pager
-sudo systemctl status free-turn-proxy-firewall --no-pager
+sudo bash free-turn-setup.sh --status
+sudo bash free-turn-setup.sh --logs
+sudo bash free-turn-setup.sh --restart
+sudo bash free-turn-setup.sh --update
+sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash>
+sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash> --client-id <client-id>
+sudo bash free-turn-setup.sh --list-clients
+sudo bash free-turn-setup.sh --add-client
+sudo bash free-turn-setup.sh --remove-client <client-id>
 ```
+
+При повторном запуске установщик переиспользует существующие WireGuard-ключи. Чтобы явно пересоздать ключи, запусти установку с `--rotate-keys`.
 
 Если у тебя уже есть WireGuard, AmneziaWG или TCP backend на VPS, на вопрос `Create local WireGuard backend on this VPS?` ответь `n` и укажи свой `host:port` в `Existing backend address`.
 
