@@ -109,6 +109,9 @@ sudo bash vps-setup.sh
 ```
 
 `docker-compose.yml`, `.env` и `run-wdtt.sh` генерируются из файлов в `templates_for_script`.
+При повторном запуске сохраненные пароль, порты, DNS, Telegram-параметры, image,
+режим firewall и данные для ссылки используются как значения по умолчанию. Новый
+пароль устанавливается только если его явно ввести; пустой ввод сохраняет текущий.
 
 Если нужен другой тег или свой registry, можно переопределить image:
 
@@ -116,7 +119,9 @@ sudo bash vps-setup.sh
 sudo WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest bash vps-setup.sh
 ```
 
-Контейнер запускается с `network_mode: host`, `privileged: true` и доступом к `/dev/net/tun`, потому что WDTT создает WireGuard-интерфейс и настраивает NAT. По умолчанию compose сам добавляет host `iptables` правила с комментарием `WDTT_DOCKER`; если firewall хочешь вести вручную, на вопрос `Manage host iptables/NAT rules for WDTT?` ответь `n`.
+Контейнер запускается с `network_mode: host`, `privileged: true` и доступом к `/dev/net/tun`, потому что WDTT создает WireGuard-интерфейс и настраивает NAT. По умолчанию entrypoint добавляет host `iptables` правила с комментарием `WDTT_DOCKER`: открывает только публичный DTLS-порт, блокирует прямой внешний доступ к внутреннему WireGuard-порту и настраивает NAT/FORWARD. SSH-порт установщик не открывает. Ошибка применения обязательного правила прерывает запуск, а `vps-setup.sh` ждет сообщения готовности сервера и показывает логи при неудаче.
+
+Если firewall ведется вручную, на вопрос `Manage host iptables/NAT rules for WDTT?` ответь `n`. В этом режиме установщик скрывает `iptables` и `nft` также от server core, поэтому внешний DTLS-доступ, блокировку WG-порта, NAT и FORWARD необходимо настроить самостоятельно. При штатном `docker compose down` entrypoint удаляет правила `WDTT_DOCKER` и `WDTT_MANAGED`; повторный запуск установщика также очищает правила со старыми портами.
 
 Команды после установки:
 
@@ -127,6 +132,9 @@ sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml pull
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml restart
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
 ```
+
+После установки файл `/opt/vkturn-vps-setup/.env` содержит пароль и создается с
+правами `600`. Не публикуй его и не добавляй в Git.
 
 Обычный `install.sh` с `systemd` остается основным вариантом для чистого VPS. Docker-вариант удобен, если тебе привычнее compose-структура и обновление через готовый Docker image.
 
@@ -291,9 +299,9 @@ WG port: 56001
 5. Собирает многофайловый Go-модуль из `app/src/main/assets/linux-server` в `/usr/local/bin/wdtt-server`.
 6. Создает `/etc/wdtt/wdtt.env` с параметрами установки.
 7. Включает `net.ipv4.ip_forward`.
-8. Создает `/usr/local/lib/wdtt/apply-firewall.sh`.
+8. Создает `/usr/local/lib/wdtt/apply-firewall.sh` и runtime helper для совместимости режима `--no-firewall` с текущим server core.
 9. Создает `wdtt-firewall.service`, чтобы правила NAT/firewall применялись после перезагрузки.
-10. Создает и запускает `wdtt.service`.
+10. Создает и запускает `wdtt.service`, затем проверяет, что сервис активен.
 
 Проверка:
 
@@ -446,6 +454,9 @@ iptables -t nat -S | grep WDTT_SETUP
 iptables -t mangle -S | grep WDTT_SETUP
 ```
 
+Для Docker-варианта замени `WDTT_SETUP` на `WDTT_DOCKER`; правила, добавленные
+самим server core, имеют комментарий `WDTT_MANAGED`.
+
 Типичные ошибки:
 
 ```text
@@ -488,8 +499,8 @@ sudo /tmp/vkturn-install.sh install \
 
 - Используй длинный уникальный пароль.
 - Для совместимости с `wdtt://` ссылками пароль ограничен символами `A-Z`, `a-z`, `0-9`, `.`, `_`, `-`.
-- `/etc/wdtt/wdtt.env` создается с правами `600`.
-- Upstream `wdtt-server` принимает пароль CLI-флагом, поэтому root-пользователь на VPS сможет увидеть его в процессах или systemd metadata. Это ограничение текущего server core.
+- `/etc/wdtt/wdtt.env` и Docker-файл `/opt/vkturn-vps-setup/.env` создаются с правами `600`.
+- Текущий `wdtt-server` принимает пароль CLI-флагом, поэтому root-пользователь на VPS сможет увидеть его в процессах или systemd metadata. Это ограничение текущего server core.
 - Не публикуй `wdtt://` ссылку публично. В ней есть пароль.
 
 ## Лицензии
