@@ -164,7 +164,7 @@ sudo bash free-turn-setup.sh
 - генерирует `Client ID` и включает allowlist через `clients.json`;
 - поднимает `free-turn-proxy` в Docker Compose с `network_mode: host`;
 - поднимает локальный WireGuard backend `wgfreeturn` на `127.0.0.1:51820`;
-- печатает готовую iOS-ссылку `vkturnproxy://import?...` и отдельные значения для режима `SRTP-WRAP-S`.
+- печатает готовые ссылки для iOS `vkturnproxy://import?...` и Android `freeturn://...`, а также отдельные значения для режима `SRTP-WRAP-S`.
 
 После установки основные файлы находятся здесь:
 
@@ -185,7 +185,14 @@ iOS import link:
 vkturnproxy://import?data=...
 ```
 
-Чтобы ссылка была готовой без ручного редактирования, при установке укажи `VK call link/hash`. Если оставить поле пустым, в ссылке будет плейсхолдер `VK_HASH`.
+И ссылку для Android-клиента [`samosvalishe/turn-proxy-android`](https://github.com/samosvalishe/turn-proxy-android):
+
+```text
+Android turn-proxy-android import link:
+freeturn://...
+```
+
+Чтобы iOS-ссылка была готовой без ручного редактирования, при установке укажи `VK call link/hash`. Если оставить поле пустым, в iOS-ссылке будет плейсхолдер `VK_HASH`.
 
 Ее можно импортировать в iOS-приложение сразу целиком. Если используешь внешний backend или хочешь заполнить поля вручную, укажи:
 
@@ -198,6 +205,8 @@ Client ID: ID, который напечатал скрипт
 WireGuard config: /opt/free-turn-proxy/wireguard-client.conf
 VK link: https://vk.com/call/join/<hash>
 ```
+
+`freeturn://` уже содержит параметры сервера, OBF, Client ID и WireGuard-конфиг. Ссылка VK Call в этот формат намеренно не входит: при её импорте Android-клиент попросит указать свою ссылку на звонок.
 
 Команды управления:
 
@@ -215,7 +224,7 @@ sudo bash free-turn-setup.sh --remove-client <client-id>
 sudo bash free-turn-setup.sh --rotate-obf-key https://vk.com/call/join/<hash>
 ```
 
-`--add-client` создает полноценного отдельного клиента: новый `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовую iOS-ссылку.
+`--add-client` создает полноценного отдельного клиента: новый `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовые ссылки для iOS и Android.
 
 При повторном запуске установщик переиспользует существующие WireGuard-ключи. Чтобы явно пересоздать ключи, запусти установку с `--rotate-keys`.
 

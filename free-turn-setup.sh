@@ -72,9 +72,9 @@ Usage:
   sudo bash free-turn-setup.sh --rotate-obf-key [vk-link-or-hash]
 
 Options:
-  --vk-link <value>       VK call link/hash for generated iOS import link.
-  --client-id <value>     Client ID for generated iOS import link.
-  --connections <1-50>    iOS connection count for generated link.
+  --vk-link <value>       VK call link/hash for the generated iOS import link.
+  --client-id <value>     Client ID for generated import links.
+  --connections <1-50>    Connection count for generated import links.
   --rotate-keys           Regenerate WireGuard keys during install.
   -h, --help              Show this help.
 EOF
@@ -278,15 +278,23 @@ validate_config() {
 }
 
 validate_link_config() {
-  FREE_TURN_OBF_PROFILE="$(printf '%s' "$FREE_TURN_OBF_PROFILE" | tr '[:upper:]' '[:lower:]')"
-  [ "$FREE_TURN_SETUP_WG" = "1" ] || die "iOS import link can be printed only for the local WireGuard backend setup."
-  valid_port "$FREE_TURN_LISTEN_PORT" || die "FREE_TURN_LISTEN_PORT must be 1-65535."
+  validate_android_link_config
   case "$FREE_TURN_OBF_PROFILE" in
     rtpopus|rtpopus2|rtpopus3) ;;
     none) die "iOS SRTP-WRAP-S import link requires rtpopus, rtpopus2 or rtpopus3." ;;
     *) die "Unsupported FREE_TURN_OBF_PROFILE: $FREE_TURN_OBF_PROFILE" ;;
   esac
-  valid_hex64 "$FREE_TURN_OBF_KEY" || die "FREE_TURN_OBF_KEY must be 64 hex chars."
+}
+
+validate_android_link_config() {
+  FREE_TURN_OBF_PROFILE="$(printf '%s' "$FREE_TURN_OBF_PROFILE" | tr '[:upper:]' '[:lower:]')"
+  [ "$FREE_TURN_SETUP_WG" = "1" ] || die "Import links can be printed only for the local WireGuard backend setup."
+  valid_port "$FREE_TURN_LISTEN_PORT" || die "FREE_TURN_LISTEN_PORT must be 1-65535."
+  case "$FREE_TURN_OBF_PROFILE" in
+    rtpopus|rtpopus2|rtpopus3) valid_hex64 "$FREE_TURN_OBF_KEY" || die "FREE_TURN_OBF_KEY must be 64 hex chars." ;;
+    none) ;;
+    *) die "Unsupported FREE_TURN_OBF_PROFILE: $FREE_TURN_OBF_PROFILE" ;;
+  esac
   case "$FREE_TURN_NUM_CONNECTIONS" in ''|*[!0-9]*) die "FREE_TURN_NUM_CONNECTIONS must be numeric." ;; esac
   [ "$FREE_TURN_NUM_CONNECTIONS" -ge 1 ] && [ "$FREE_TURN_NUM_CONNECTIONS" -le 50 ] || die "FREE_TURN_NUM_CONNECTIONS must be 1-50."
   valid_client_id "$FREE_TURN_CLIENT_ID" || die "FREE_TURN_CLIENT_ID must be 1-255 chars: A-Z, a-z, 0-9, dot, underscore, colon or dash."
@@ -748,7 +756,17 @@ normalize_vk_link() {
 }
 
 json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+  printf '%s' "$1" | awk 'BEGIN { ORS="" } {
+    if (NR > 1) printf "\\\\n"
+    out = ""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (c == "\\") out = out "\\\\"
+      else if (c == "\"") out = out "\\\""
+      else out = out c
+    }
+    printf "%s", out
+  }'
 }
 
 base64url_no_pad() {
@@ -836,13 +854,65 @@ build_ios_connection_link() {
   printf 'vkturnproxy://import?data=%s' "$(printf '%s' "$json" | base64url_no_pad)"
 }
 
+build_android_wireguard_config() {
+  printf '[Interface]\nPrivateKey = %s\nAddress = %s/32\nDNS = %s\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = %s\nPersistentKeepalive = 25' \
+    "$FREE_TURN_WG_CLIENT_PRIVATE_KEY" \
+    "$FREE_TURN_WG_CLIENT_ADDRESS" \
+    "$FREE_TURN_WG_DNS" \
+    "$FREE_TURN_WG_SERVER_PUBLIC_KEY" \
+    "$FREE_TURN_WG_CLIENT_ENDPOINT"
+}
+
+build_android_connection_link() {
+  [ "$FREE_TURN_SETUP_WG" = "1" ] || return 1
+
+  local peer_host wg_conf json
+  peer_host="$(public_host)"
+  wg_conf="$(build_android_wireguard_config)"
+
+  case "$FREE_TURN_OBF_PROFILE" in
+    rtpopus|rtpopus2|rtpopus3)
+      valid_hex64 "$FREE_TURN_OBF_KEY" || return 1
+      json="$(printf '{"v":1,"provider":"vk","peer":"%s:%s","obf":"%s","key":"%s","n":%s,"spc":%s,"cid":"%s","name":"free-turn-proxy","wg":"%s"}' \
+        "$(json_escape "$peer_host")" \
+        "$FREE_TURN_LISTEN_PORT" \
+        "$(json_escape "$FREE_TURN_OBF_PROFILE")" \
+        "$(json_escape "$FREE_TURN_OBF_KEY")" \
+        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$(json_escape "$FREE_TURN_CLIENT_ID")" \
+        "$(json_escape "$wg_conf")")"
+      ;;
+    none)
+      json="$(printf '{"v":1,"provider":"vk","peer":"%s:%s","n":%s,"spc":%s,"cid":"%s","name":"free-turn-proxy","wg":"%s"}' \
+        "$(json_escape "$peer_host")" \
+        "$FREE_TURN_LISTEN_PORT" \
+        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$(json_escape "$FREE_TURN_CLIENT_ID")" \
+        "$(json_escape "$wg_conf")")"
+      ;;
+    *) return 1 ;;
+  esac
+
+  printf 'freeturn://%s' "$(printf '%s' "$json" | base64url_no_pad)"
+}
+
 print_link_command() {
   load_existing_stack_config
   load_existing_wireguard_config
-  validate_link_config
+  validate_android_link_config
 
-  echo "iOS import link:"
-  echo "$(build_ios_connection_link)"
+  echo "Android free-turn-proxy import link:"
+  echo "$(build_android_connection_link)"
+  if [ "$FREE_TURN_OBF_PROFILE" != "none" ]; then
+    echo
+    echo "iOS import link:"
+    echo "$(build_ios_connection_link)"
+  else
+    echo
+    echo "iOS import link skipped: SRTP-WRAP-S import requires rtpopus, rtpopus2 or rtpopus3."
+  fi
 }
 
 print_summary() {
@@ -869,6 +939,9 @@ print_summary() {
       echo
       echo "iOS import link skipped: SRTP-WRAP-S import requires rtpopus, rtpopus2 or rtpopus3."
     fi
+    echo
+    echo "Android turn-proxy-android import link:"
+    echo "$(build_android_connection_link)"
     echo
     echo "WireGuard client config:"
     echo "  $INSTALL_DIR/wireguard-client.conf"
@@ -935,6 +1008,9 @@ add_client_command() {
   else
     echo "iOS import link skipped: SRTP-WRAP-S import requires rtpopus, rtpopus2 or rtpopus3."
   fi
+  echo
+  echo "Android turn-proxy-android import link:"
+  echo "$(build_android_connection_link)"
 }
 
 remove_client_command() {
@@ -1018,6 +1094,9 @@ rotate_obf_key_command() {
     validate_link_config
     echo "iOS import link:"
     echo "$(build_ios_connection_link)"
+    echo
+    echo "Android turn-proxy-android import link:"
+    echo "$(build_android_connection_link)"
   fi
 }
 
