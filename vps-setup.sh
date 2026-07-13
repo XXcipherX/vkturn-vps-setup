@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 trap 'echo "Error on line $LINENO. Exit code: $?" >&2' ERR
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/vkturn-vps-setup"
 ENV_FILE="$INSTALL_DIR/.env"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
@@ -333,4 +333,6 @@ main() {
   echo "Logs: docker compose -f $COMPOSE_FILE logs -f"
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 trap 'echo "Error on line $LINENO. Exit code: $?" >&2' ERR
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${FREE_TURN_INSTALL_DIR:-/opt/free-turn-proxy}"
 TEMPLATE_DIR="$SCRIPT_DIR/templates_for_script"
 WG_DIR="${FREE_TURN_WG_DIR:-/etc/wireguard}"
@@ -1135,7 +1135,7 @@ health_check() {
   echo "Health check:"
   check_item "compose file exists" test -f "$compose" || failed=1
   check_item "container is running" bash -c '[ "$(docker inspect -f "{{.State.Running}}" free-turn-proxy 2>/dev/null)" = "true" ]' || failed=1
-  check_item "UDP port $listen_port is listening" bash -c "ss -H -lun | grep -Eq '(^|[[:space:]])[^[:space:]]*:$listen_port[[:space:]]'" || failed=1
+  check_item "UDP port $listen_port is listening" bash -c "ss -H -lun | grep -Eq '(^|[[:space:]])[^[:space:]]*:${listen_port}[[:space:]]'" || failed=1
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
     check_item "WireGuard service is active" systemctl is-active --quiet "wg-quick@$FREE_TURN_WG_IFACE" || failed=1
     check_item "IPv4 forwarding is enabled" bash -c '[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ]' || failed=1
@@ -1237,4 +1237,6 @@ main() {
   esac
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

@@ -503,6 +503,21 @@ sudo /tmp/vkturn-install.sh install \
 - Текущий `wdtt-server` принимает пароль CLI-флагом, поэтому root-пользователь на VPS сможет увидеть его в процессах или systemd metadata. Это ограничение текущего server core.
 - Не публикуй `wdtt://` ссылку публично. В ней есть пароль.
 
+## Автоматические проверки
+
+Workflow `.github/workflows/smoke.yml` запускается при каждом push, при создании
+или обновлении pull request и вручную через GitHub Actions. Он проверяет синтаксис
+и ShellCheck всех shell-скриптов, YAML, генерацию конфигурации обоих установщиков,
+Docker Compose для WDTT и Free Turn, права secret-файлов, валидацию входных данных,
+firewall-инварианты и синхронизацию ключевых ссылок в README.
+
+Тот же набор smoke-тестов можно запустить локально на Linux, если установлены
+`shellcheck`, `envsubst` и Docker Compose:
+
+```bash
+bash tests/smoke.sh
+```
+
 ## Лицензии
 
 Этот репозиторий содержит только установщик и README, лицензия - MIT.

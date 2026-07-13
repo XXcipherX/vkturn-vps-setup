@@ -1,0 +1,38 @@
+name: Repository smoke tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install smoke-test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext-base shellcheck yamllint
+
+      - name: Validate YAML
+        run: >-
+          yamllint
+          -d '{extends: relaxed, rules: {line-length: disable, truthy: disable}}'
+          .github/workflows/smoke.yml
+          templates_for_script/compose
+          templates_for_script/free-turn-compose
+
+      - name: Run repository smoke tests
+        run: bash tests/smoke.sh
