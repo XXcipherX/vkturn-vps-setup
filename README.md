@@ -8,7 +8,7 @@
 
 Этот репозиторий не содержит серверное ядро. Он автоматизирует установку на основе двух проектов:
 
-- `amurcanov/proxy-turn-vk-android` - WDTT server core, встроенный WireGuard, WRAP-A/RTP AEAD, `GETCONF`.
+- `XXcipherX/proxy-turn-vk-android`, ветка `main-new` - актуальный WDTT server core, встроенный WireGuard, WRAP-A/RTP AEAD, `GETCONF`.
 - `anton48/vk-turn-proxy-ios` - iOS-клиент, который умеет подключаться к WDTT server core в режиме `SRTP-WRAP-A`.
 
 Для iOS в этом режиме **не нужно отдельно поднимать WireGuard на VPS** и не нужно вручную вводить WireGuard-ключи в приложение. Сервер сам выдает клиенту WireGuard-конфиг через `GETCONF`.
@@ -39,7 +39,7 @@ iPhone vk-turn-proxy-ios
 
 ```text
 56000/udp - публичный WDTT DTLS/WRAP-A порт
-56001/udp - внутренний WireGuard-порт wdtt-server
+56001/udp - внутренний WireGuard-порт wdtt-server, снаружи должен быть закрыт
 10.66.66.0/24 - подсеть клиентов
 wdtt0 - WireGuard-интерфейс на VPS
 ```
@@ -287,8 +287,8 @@ WG port: 56001
 1. Определяет Linux-дистрибутив.
 2. Ставит системные зависимости: `curl`, `git`, `iproute2`, `iptables`, `nftables`, `procps`, `psmisc`.
 3. Проверяет Go. Если системный Go старее нужного, скачивает Go в `/opt/wdtt/go`.
-4. Клонирует исходники WDTT из `https://github.com/amurcanov/proxy-turn-vk-android.git` в `/opt/wdtt/source`.
-5. Собирает `server.go` в `/usr/local/bin/wdtt-server`.
+4. Клонирует актуальную ветку `main-new` из `https://github.com/XXcipherX/proxy-turn-vk-android.git` в `/opt/wdtt/source`.
+5. Собирает многофайловый Go-модуль из `app/src/main/assets/linux-server` в `/usr/local/bin/wdtt-server`.
 6. Создает `/etc/wdtt/wdtt.env` с параметрами установки.
 7. Включает `net.ipv4.ip_forward`.
 8. Создает `/usr/local/lib/wdtt/apply-firewall.sh`.
@@ -360,14 +360,14 @@ sudo /tmp/vkturn-install.sh uninstall --purge
 --host / WDTT_PUBLIC_HOST        IP или домен для ссылки iOS, без схемы и порта
 --dtls-port / WDTT_DTLS_PORT     публичный UDP-порт, default 56000
 --wg-port / WDTT_WG_PORT         внутренний WG UDP-порт, default 56001
---ssh-port / WDTT_SSH_PORT       SSH TCP-порт, default 22
+--ssh-port / WDTT_SSH_PORT       SSH TCP-порт для совместимости и очистки старых правил, default 22
 --dns / WDTT_DNS                 DNS для клиентов, default 1.1.1.1,1.0.0.1
 --admin-id / WDTT_ADMIN_ID       Telegram admin ID, optional
 --bot-token / WDTT_BOT_TOKEN     Telegram bot token, optional
---source-repo / WDTT_SOURCE_REPO upstream repo для сборки wdtt-server
---source-ref / WDTT_SOURCE_REF   branch, tag или commit, default main
+--source-repo / WDTT_SOURCE_REPO репозиторий для сборки wdtt-server, default XXcipherX/proxy-turn-vk-android
+--source-ref / WDTT_SOURCE_REF   branch, tag или commit, default main-new
 --go-version / WDTT_GO_VERSION   Go version, default 1.25.0
---no-firewall / WDTT_NO_FIREWALL не трогать iptables
+--no-firewall / WDTT_NO_FIREWALL не применять iptables/nft правила ни установщиком, ни server core
 --with-firewall                  снова включить managed iptables после --no-firewall
 ```
 
@@ -400,10 +400,14 @@ sudo /tmp/vkturn-install.sh install \
 Открой там:
 
 ```text
-56000/udp - обязательно
-56001/udp - желательно оставить открытым для совместимости
-22/tcp или твой SSH-порт
+56000/udp - открыть обязательно
+56001/udp - обязательно закрыть снаружи; это только внутренний WireGuard-порт
+22/tcp или твой SSH-порт - настрой отдельно по своей политике доступа
 ```
+
+Установщик не открывает SSH-порт самостоятельно и блокирует вход к WireGuard-порту
+со всех интерфейсов, кроме loopback. Если используется `--no-firewall`, эти правила,
+NAT и FORWARD нужно настроить вручную до запуска WDTT.
 
 Если меняешь `--dtls-port`, в iOS нужно указывать именно его:
 
@@ -463,7 +467,7 @@ Bootstrap timeout на iOS
 
 ## Обновление server core
 
-По умолчанию скрипт собирает текущую ветку `main` upstream-репозитория.
+По умолчанию скрипт собирает текущую ветку `main-new` форка XXcipherX.
 
 Чтобы зафиксироваться на конкретном теге или commit:
 
@@ -492,4 +496,4 @@ sudo /tmp/vkturn-install.sh install \
 
 Этот репозиторий содержит только установщик и README, лицензия - MIT.
 
-Серверное ядро `wdtt-server` скачивается и собирается из upstream-проекта `proxy-turn-vk-android`, его лицензия и условия распространения остаются условиями upstream-проекта.
+Серверное ядро `wdtt-server` скачивается и собирается из форка `XXcipherX/proxy-turn-vk-android`, его лицензия и условия распространения остаются условиями исходного проекта.

@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_VERSION="0.1.1"
 
-WDTT_SOURCE_REPO_DEFAULT="https://github.com/amurcanov/proxy-turn-vk-android.git"
-WDTT_SOURCE_REF_DEFAULT="main"
+WDTT_SOURCE_REPO_DEFAULT="https://github.com/XXcipherX/proxy-turn-vk-android.git"
+WDTT_SOURCE_REF_DEFAULT="main-new"
 WDTT_GO_VERSION_DEFAULT="1.25.0"
 
 WDTT_INSTALL_ROOT="${WDTT_INSTALL_ROOT:-/opt/wdtt}"
@@ -15,6 +15,8 @@ WDTT_LIB_DIR="${WDTT_LIB_DIR:-/usr/local/lib/wdtt}"
 WDTT_BIN="${WDTT_BIN:-/usr/local/bin/wdtt-server}"
 WDTT_ENV_FILE="${WDTT_ENV_FILE:-$WDTT_CONFIG_DIR/wdtt.env}"
 WDTT_FIREWALL_SCRIPT="${WDTT_FIREWALL_SCRIPT:-$WDTT_LIB_DIR/apply-firewall.sh}"
+WDTT_RUN_SCRIPT="${WDTT_RUN_SCRIPT:-$WDTT_LIB_DIR/run-wdtt.sh}"
+WDTT_NO_FIREWALL_BIN="${WDTT_NO_FIREWALL_BIN:-$WDTT_LIB_DIR/no-firewall-bin}"
 
 ACTION="install"
 PASSWORD="${WDTT_PASSWORD:-}"
@@ -31,6 +33,10 @@ SOURCE_REF="${WDTT_SOURCE_REF:-$WDTT_SOURCE_REF_DEFAULT}"
 GO_VERSION="${WDTT_GO_VERSION:-$WDTT_GO_VERSION_DEFAULT}"
 NO_FIREWALL="${WDTT_NO_FIREWALL:-0}"
 PURGE="0"
+PREVIOUS_DTLS_PORT=""
+PREVIOUS_WG_PORT=""
+PREVIOUS_SSH_PORT=""
+PREVIOUS_SUBNET="10.66.66.0/24"
 
 PASSWORD_SET=0; [ "${WDTT_PASSWORD+x}" = "x" ] && PASSWORD_SET=1
 VK_LINK_SET=0; [ "${WDTT_VK_LINK+x}" = "x" ] && VK_LINK_SET=1
@@ -73,14 +79,14 @@ Main options:
   --host VALUE          Public IP or domain for the iOS link.
   --dtls-port PORT      Public WDTT DTLS/WRAP-A UDP port. Default: 56000.
   --wg-port PORT        Internal WireGuard UDP port. Default: 56001.
-  --ssh-port PORT       SSH TCP port to keep allowed in iptables. Default: 22.
+  --ssh-port PORT       SSH TCP port saved for compatibility/cleanup. Default: 22.
   --dns VALUE           DNS sent to clients, comma-separated. Default: 1.1.1.1,1.0.0.1.
   --admin-id VALUE      Optional Telegram admin ID for WDTT access manager.
   --bot-token VALUE     Optional Telegram bot token for WDTT access manager.
   --source-repo URL     Source repo to build wdtt-server from.
-  --source-ref REF      Branch, tag, or commit. Default: main.
+  --source-ref REF      Branch, tag, or commit. Default: main-new.
   --go-version VERSION  Go version used if system Go is too old. Default: 1.25.0.
-  --no-firewall         Do not install or apply iptables rules.
+  --no-firewall         Disable installer and server-core iptables/nft rules.
   --with-firewall       Re-enable managed iptables rules after --no-firewall.
   --purge               With uninstall: remove /etc/wdtt too.
 
@@ -349,6 +355,9 @@ validate_inputs() {
   validate_abs_path "WDTT_BIN" "$WDTT_BIN"
   validate_abs_path "WDTT_ENV_FILE" "$WDTT_ENV_FILE"
   validate_abs_path "WDTT_FIREWALL_SCRIPT" "$WDTT_FIREWALL_SCRIPT"
+  validate_abs_path "WDTT_RUN_SCRIPT" "$WDTT_RUN_SCRIPT"
+  validate_abs_path "WDTT_NO_FIREWALL_BIN" "$WDTT_NO_FIREWALL_BIN"
+  [ "$DTLS_PORT" != "$WG_PORT" ] || die "WDTT_DTLS_PORT and WDTT_WG_PORT must be different."
 }
 
 load_env_file() {
@@ -356,6 +365,10 @@ load_env_file() {
   # The file is created by this installer and kept shell-compatible.
   # shellcheck disable=SC1090
   . "$WDTT_ENV_FILE"
+  PREVIOUS_DTLS_PORT="${WDTT_DTLS_PORT:-}"
+  PREVIOUS_WG_PORT="${WDTT_WG_PORT:-}"
+  PREVIOUS_SSH_PORT="${WDTT_SSH_PORT:-}"
+  PREVIOUS_SUBNET="${WDTT_SUBNET:-10.66.66.0/24}"
   [ "$PASSWORD_SET" = "0" ] && PASSWORD="${WDTT_PASSWORD:-$PASSWORD}"
   [ "$PUBLIC_HOST_SET" = "0" ] && PUBLIC_HOST="${WDTT_PUBLIC_HOST:-$PUBLIC_HOST}"
   [ "$DTLS_PORT_SET" = "0" ] && DTLS_PORT="${WDTT_DTLS_PORT:-$DTLS_PORT}"
@@ -476,8 +489,11 @@ fetch_source() {
   local source_commit
   source_commit="$(git -C "$WDTT_SOURCE_DIR" rev-parse --short HEAD)"
   log "WDTT source commit: $source_commit"
-  [ -f "$WDTT_SOURCE_DIR/server.go" ] || die "server.go not found in $WDTT_SOURCE_DIR"
-  [ -f "$WDTT_SOURCE_DIR/go.mod" ] || die "go.mod not found in $WDTT_SOURCE_DIR"
+  SERVER_SOURCE_DIR="$WDTT_SOURCE_DIR/app/src/main/assets/linux-server"
+  if [ ! -f "$SERVER_SOURCE_DIR/go.mod" ]; then
+    die "Current WDTT server module not found at $SERVER_SOURCE_DIR"
+  fi
+  [ -f "$SERVER_SOURCE_DIR/main.go" ] || die "main.go not found in $SERVER_SOURCE_DIR"
 }
 
 build_server() {
@@ -485,10 +501,10 @@ build_server() {
   tmp_bin="$(mktemp)"
   log "Building wdtt-server..."
   (
-    cd "$WDTT_SOURCE_DIR"
+    cd "$SERVER_SOURCE_DIR"
     log "Downloading Go modules..."
     GOFLAGS= GOTOOLCHAIN=auto "$GO_BIN" mod download
-    GOFLAGS= GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux "$GO_BIN" build -mod=mod -trimpath -ldflags="-s -w" -o "$tmp_bin" server.go
+    GOFLAGS= GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux "$GO_BIN" build -mod=readonly -trimpath -ldflags="-s -w -checklinkname=0" -o "$tmp_bin" .
   )
   install -m 0755 "$tmp_bin" "$WDTT_BIN"
   rm -f "$tmp_bin"
@@ -525,14 +541,13 @@ write_firewall_script() {
   mkdir -p "$WDTT_LIB_DIR"
   cat > "$WDTT_FIREWALL_SCRIPT" <<EOF
 #!/usr/bin/env bash
-set -u
+set -Eeuo pipefail
 
 ENV_FILE="$WDTT_ENV_FILE"
 [ -f "\$ENV_FILE" ] && . "\$ENV_FILE"
 
 DTLS="\${WDTT_DTLS_PORT:-56000}"
 WG="\${WDTT_WG_PORT:-56001}"
-SSH="\${WDTT_SSH_PORT:-22}"
 IFACE="\${WDTT_IFACE:-wdtt0}"
 SUBNET="\${WDTT_SUBNET:-10.66.66.0/24}"
 COMMENT="\${WDTT_IPT_COMMENT:-WDTT_SETUP}"
@@ -544,50 +559,89 @@ wan_iface() {
 
 add_input_udp() {
   local port="\$1"
-  iptables -C INPUT -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -I INPUT -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || true
+  iptables -w -C INPUT -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
+    iptables -w -I INPUT -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT
 }
 
-add_input_tcp() {
+block_external_wg() {
   local port="\$1"
-  iptables -C INPUT -p tcp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -I INPUT -p tcp --dport "\$port" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || true
+  iptables -w -C INPUT ! -i lo -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+    iptables -w -I INPUT 1 ! -i lo -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j DROP
+  if command -v ip6tables >/dev/null 2>&1 && [ -s /proc/net/if_inet6 ]; then
+    ip6tables -w -C INPUT ! -i lo -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+      ip6tables -w -I INPUT 1 ! -i lo -p udp --dport "\$port" -m comment --comment "\$COMMENT" -j DROP
+  fi
 }
 
 add_forward() {
-  iptables -C FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -I FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || true
-  iptables -C FORWARD -o "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -I FORWARD -o "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || true
+  iptables -w -C FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
+    iptables -w -I FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -o "\$IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
+    iptables -w -I FORWARD -o "\$IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT
 }
 
 add_nat() {
   local wan="\$1"
   [ -n "\$wan" ] || return 0
-  iptables -t nat -C POSTROUTING -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j MASQUERADE 2>/dev/null || \\
-    iptables -t nat -A POSTROUTING -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j MASQUERADE 2>/dev/null || true
+  iptables -w -t nat -C POSTROUTING -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j MASQUERADE 2>/dev/null || \\
+    iptables -w -t nat -A POSTROUTING -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j MASQUERADE
 }
 
 add_mss_clamp() {
-  iptables -t mangle -C FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
-    iptables -t mangle -I FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-  iptables -t mangle -C FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
-    iptables -t mangle -I FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables -w -t mangle -C FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
+    iptables -w -t mangle -I FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu
+  iptables -w -t mangle -C FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \\
+    iptables -w -t mangle -I FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$COMMENT" -j TCPMSS --clamp-mss-to-pmtu
 }
 
 if [ "\$NO_FIREWALL" = "1" ]; then
   exit 0
 fi
 
-command -v iptables >/dev/null 2>&1 || exit 0
+command -v iptables >/dev/null 2>&1 || { echo "iptables is required when WDTT firewall management is enabled" >&2; exit 1; }
+WAN="\$(wan_iface)"
+[ -n "\$WAN" ] || { echo "Unable to detect the default WAN interface" >&2; exit 1; }
 add_input_udp "\$DTLS"
-add_input_udp "\$WG"
-add_input_tcp "\$SSH"
+block_external_wg "\$WG"
 add_forward
-add_nat "\$(wan_iface)"
+add_nat "\$WAN"
 add_mss_clamp
 EOF
   chmod 0755 "$WDTT_FIREWALL_SCRIPT"
+}
+
+write_runtime_script() {
+  log "Writing WDTT runtime helper: $WDTT_RUN_SCRIPT"
+  mkdir -p "$WDTT_LIB_DIR"
+  cat > "$WDTT_RUN_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ENV_FILE="$WDTT_ENV_FILE"
+[ -f "\$ENV_FILE" ] && . "\$ENV_FILE"
+
+if [ "\${WDTT_NO_FIREWALL:-0}" = "1" ]; then
+  mkdir -p "$WDTT_NO_FIREWALL_BIN"
+  for command_name in ip sysctl bash awk head grep; do
+    command_path="\$(command -v "\$command_name" 2>/dev/null || true)"
+    [ -n "\$command_path" ] || { echo "Required command not found: \$command_name" >&2; exit 1; }
+    ln -sf "\$command_path" "$WDTT_NO_FIREWALL_BIN/\$command_name"
+  done
+  # The current server core auto-detects iptables/nft through PATH. A private
+  # command set makes --no-firewall effective regardless of distro layout.
+  export PATH="$WDTT_NO_FIREWALL_BIN"
+fi
+
+exec "$WDTT_BIN" \\
+  -listen="0.0.0.0:\${WDTT_DTLS_PORT}" \\
+  -wg-port="\${WDTT_WG_PORT}" \\
+  -config-dir="$WDTT_CONFIG_DIR" \\
+  -password="\${WDTT_PASSWORD}" \\
+  -admin="\${WDTT_ADMIN_ID:-}" \\
+  -bot-token="\${WDTT_BOT_TOKEN:-}" \\
+  -dns="\${WDTT_DNS}"
+EOF
+  chmod 0755 "$WDTT_RUN_SCRIPT"
 }
 
 write_systemd_units() {
@@ -618,10 +672,11 @@ Type=simple
 EnvironmentFile=$WDTT_ENV_FILE
 ExecStartPre=-/usr/bin/env bash -c 'ip link show wdtt0 >/dev/null 2>&1 && ip link del wdtt0 >/dev/null 2>&1 || true'
 ExecStartPre=$WDTT_FIREWALL_SCRIPT
-ExecStart=$WDTT_BIN -listen=0.0.0.0:\${WDTT_DTLS_PORT} -wg-port=\${WDTT_WG_PORT} -config-dir=$WDTT_CONFIG_DIR -password=\${WDTT_PASSWORD} -admin=\${WDTT_ADMIN_ID} -bot-token=\${WDTT_BOT_TOKEN} -dns=\${WDTT_DNS}
+ExecStart=$WDTT_RUN_SCRIPT
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
@@ -709,9 +764,11 @@ install_wdtt() {
   ensure_go
   fetch_source
   build_server
+  cleanup_firewall_rules
   write_env_file
   setup_sysctl
   write_firewall_script
+  write_runtime_script
   write_systemd_units
   start_services
   print_ios_link
@@ -738,27 +795,51 @@ delete_iptables_rule() {
   shift
   for _ in 1 2 3 4 5; do
     if [ "$table" = "filter" ]; then
-      iptables -D "$@" 2>/dev/null || break
+      iptables -w -D "$@" 2>/dev/null || break
     else
-      iptables -t "$table" -D "$@" 2>/dev/null || break
+      iptables -w -t "$table" -D "$@" 2>/dev/null || break
     fi
   done
 }
 
-cleanup_firewall_rules() {
-  command -v iptables >/dev/null 2>&1 || return 0
-  local comment="${WDTT_IPT_COMMENT:-WDTT_SETUP}"
-  local subnet="${WDTT_SUBNET:-10.66.66.0/24}"
-  delete_iptables_rule filter INPUT -p udp --dport "$DTLS_PORT" -m comment --comment "$comment" -j ACCEPT
-  delete_iptables_rule filter INPUT -p udp --dport "$WG_PORT" -m comment --comment "$comment" -j ACCEPT
-  delete_iptables_rule filter INPUT -p tcp --dport "$SSH_PORT" -m comment --comment "$comment" -j ACCEPT
-  delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j ACCEPT
-  delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j ACCEPT
-  delete_iptables_rule mangle FORWARD -s "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
-  delete_iptables_rule mangle FORWARD -d "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
-  for iface in $(ls /sys/class/net 2>/dev/null || true); do
-    delete_iptables_rule nat POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$comment" -j MASQUERADE
+delete_ip6tables_rule() {
+  command -v ip6tables >/dev/null 2>&1 || return 0
+  for _ in 1 2 3 4 5; do
+    ip6tables -w -D "$@" 2>/dev/null || break
   done
+}
+
+cleanup_firewall_rules_for() {
+  command -v iptables >/dev/null 2>&1 || return 0
+  local dtls="$1" wg="$2" ssh="$3" subnet="$4" comment iface
+  for comment in WDTT_SETUP WDTT_MANAGED; do
+    if [ -n "$dtls" ]; then
+      delete_iptables_rule filter INPUT -p udp --dport "$dtls" -m comment --comment "$comment" -j ACCEPT
+    fi
+    if [ -n "$wg" ]; then
+      delete_iptables_rule filter INPUT -p udp --dport "$wg" -m comment --comment "$comment" -j ACCEPT
+      delete_iptables_rule filter INPUT ! -i lo -p udp --dport "$wg" -m comment --comment "$comment" -j DROP
+      delete_ip6tables_rule INPUT ! -i lo -p udp --dport "$wg" -m comment --comment "$comment" -j DROP
+    fi
+    if [ -n "$ssh" ]; then
+      delete_iptables_rule filter INPUT -p tcp --dport "$ssh" -m comment --comment "$comment" -j ACCEPT
+    fi
+    delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule filter FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule mangle FORWARD -s "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
+    delete_iptables_rule mangle FORWARD -d "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
+    for iface in $(ls /sys/class/net 2>/dev/null || true); do
+      delete_iptables_rule nat POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$comment" -j MASQUERADE
+    done
+  done
+}
+
+cleanup_firewall_rules() {
+  cleanup_firewall_rules_for "$DTLS_PORT" "$WG_PORT" "$SSH_PORT" "${WDTT_SUBNET:-10.66.66.0/24}"
+  if [ -n "$PREVIOUS_DTLS_PORT$PREVIOUS_WG_PORT$PREVIOUS_SSH_PORT" ]; then
+    cleanup_firewall_rules_for "$PREVIOUS_DTLS_PORT" "$PREVIOUS_WG_PORT" "$PREVIOUS_SSH_PORT" "$PREVIOUS_SUBNET"
+  fi
 }
 
 uninstall_wdtt() {
