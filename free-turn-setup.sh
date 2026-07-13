@@ -338,11 +338,11 @@ read_env_value() {
 
 read_conf_value() {
   local file="$1" key="$2"
-  [ -f "$file" ] || return 1
-  awk -F= -v key="$key" '
-    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
-      value=$2
-      sub(/^[[:space:]]+/, "", value)
+  [ -r "$file" ] || return 1
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      value=$0
+      sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", value)
       sub(/[[:space:]\r]+$/, "", value)
       print value
       found=1
@@ -757,7 +757,7 @@ normalize_vk_link() {
 
 json_escape() {
   printf '%s' "$1" | awk 'BEGIN { ORS="" } {
-    if (NR > 1) printf "\\\\n"
+    if (NR > 1) printf "\\n"
     out = ""
     for (i = 1; i <= length($0); i++) {
       c = substr($0, i, 1)
