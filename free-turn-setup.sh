@@ -74,7 +74,7 @@ Usage:
 Options:
   --vk-link <value>       VK call link/hash for the generated iOS import link.
   --client-id <value>     Client ID for generated import links.
-  --connections <1-50>    Connection count for generated import links.
+  --connections <1-50>    iOS connection count for the generated import link.
   --rotate-keys           Regenerate WireGuard keys during install.
   -h, --help              Show this help.
 EOF
@@ -866,7 +866,9 @@ build_android_wireguard_config() {
 build_android_connection_link() {
   [ "$FREE_TURN_SETUP_WG" = "1" ] || return 1
 
-  local peer_host wg_conf json
+  # VK TURN limits allocations per credentials cache. Keep Android's first
+  # connection conservative instead of copying the higher iOS stream count.
+  local peer_host wg_conf json android_connections=10 android_streams_per_cred=10
   peer_host="$(public_host)"
   wg_conf="$(build_android_wireguard_config)"
 
@@ -878,8 +880,8 @@ build_android_connection_link() {
         "$FREE_TURN_LISTEN_PORT" \
         "$(json_escape "$FREE_TURN_OBF_PROFILE")" \
         "$(json_escape "$FREE_TURN_OBF_KEY")" \
-        "$FREE_TURN_NUM_CONNECTIONS" \
-        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$android_connections" \
+        "$android_streams_per_cred" \
         "$(json_escape "$FREE_TURN_CLIENT_ID")" \
         "$(json_escape "$wg_conf")")"
       ;;
@@ -887,8 +889,8 @@ build_android_connection_link() {
       json="$(printf '{"v":1,"provider":"vk","peer":"%s:%s","n":%s,"spc":%s,"cid":"%s","name":"free-turn-proxy","wg":"%s"}' \
         "$(json_escape "$peer_host")" \
         "$FREE_TURN_LISTEN_PORT" \
-        "$FREE_TURN_NUM_CONNECTIONS" \
-        "$FREE_TURN_NUM_CONNECTIONS" \
+        "$android_connections" \
+        "$android_streams_per_cred" \
         "$(json_escape "$FREE_TURN_CLIENT_ID")" \
         "$(json_escape "$wg_conf")")"
       ;;
