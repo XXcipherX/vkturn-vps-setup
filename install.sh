@@ -574,10 +574,19 @@ block_external_wg() {
 }
 
 add_forward() {
-  iptables -w -C FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -w -I FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j ACCEPT
-  iptables -w -C FORWARD -o "\$IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
-    iptables -w -I FORWARD -o "\$IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT
+  local wan="\$1"
+  iptables -w -C INPUT -i "\$IFACE" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+    iptables -w -I INPUT 1 -i "\$IFACE" -m comment --comment "\$COMMENT" -j DROP
+  iptables -w -C FORWARD -o "\$IFACE" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+    iptables -w -I FORWARD 1 -o "\$IFACE" -m comment --comment "\$COMMENT" -j DROP
+  iptables -w -C FORWARD -i "\$IFACE" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+    iptables -w -I FORWARD 1 -i "\$IFACE" -m comment --comment "\$COMMENT" -j DROP
+  iptables -w -C FORWARD -i "\$wan" -o "\$IFACE" -d "\$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
+    iptables -w -I FORWARD 1 -i "\$wan" -o "\$IFACE" -d "\$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "\$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -i "\$IFACE" -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j ACCEPT 2>/dev/null || \\
+    iptables -w -I FORWARD 1 -i "\$IFACE" -s "\$SUBNET" -o "\$wan" -m comment --comment "\$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -i "\$IFACE" -o "\$IFACE" -m comment --comment "\$COMMENT" -j DROP 2>/dev/null || \\
+    iptables -w -I FORWARD 1 -i "\$IFACE" -o "\$IFACE" -m comment --comment "\$COMMENT" -j DROP
 }
 
 add_nat() {
@@ -603,7 +612,7 @@ WAN="\$(wan_iface)"
 [ -n "\$WAN" ] || { echo "Unable to detect the default WAN interface" >&2; exit 1; }
 add_input_udp "\$DTLS"
 block_external_wg "\$WG"
-add_forward
+add_forward "\$WAN"
 add_nat "\$WAN"
 add_mss_clamp
 EOF
@@ -827,9 +836,15 @@ cleanup_firewall_rules_for() {
     delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule filter INPUT -i wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -i wdtt0 -o wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j DROP
     delete_iptables_rule mangle FORWARD -s "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     delete_iptables_rule mangle FORWARD -d "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     for iface in $(ls /sys/class/net 2>/dev/null || true); do
+      delete_iptables_rule filter FORWARD -i wdtt0 -s "$subnet" -o "$iface" -m comment --comment "$comment" -j ACCEPT
+      delete_iptables_rule filter FORWARD -i "$iface" -o wdtt0 -d "$subnet" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
       delete_iptables_rule nat POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$comment" -j MASQUERADE
     done
   done

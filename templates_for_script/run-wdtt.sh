@@ -39,6 +39,7 @@ cleanup_rules() {
     delete_iptables_rule filter INPUT -p udp --dport "$WDTT_DTLS_PORT" -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter INPUT -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter INPUT -i wdtt0 -m comment --comment "$comment" -j DROP
     delete_ip6tables_rule INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$comment" -j DROP
     if [ -n "${WDTT_SSH_PORT:-}" ]; then
       delete_iptables_rule filter INPUT -p tcp --dport "$WDTT_SSH_PORT" -m comment --comment "$comment" -j ACCEPT
@@ -46,11 +47,16 @@ cleanup_rules() {
     delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule filter FORWARD -i wdtt0 -o wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j DROP
     delete_iptables_rule mangle FORWARD -s "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     delete_iptables_rule mangle FORWARD -d "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     for iface_path in /sys/class/net/*; do
       [ -e "$iface_path" ] || continue
       iface="${iface_path##*/}"
+      delete_iptables_rule filter FORWARD -i wdtt0 -s "$SUBNET" -o "$iface" -m comment --comment "$comment" -j ACCEPT
+      delete_iptables_rule filter FORWARD -i "$iface" -o wdtt0 -d "$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
       delete_iptables_rule nat POSTROUTING -s "$SUBNET" -o "$iface" -m comment --comment "$comment" -j MASQUERADE
     done
   done
@@ -71,14 +77,22 @@ apply_rules() {
     iptables -w -I INPUT -p udp --dport "$WDTT_DTLS_PORT" -m comment --comment "$COMMENT" -j ACCEPT
   iptables -w -C INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
     iptables -w -I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP
+  iptables -w -C INPUT -i wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
+    iptables -w -I INPUT 1 -i wdtt0 -m comment --comment "$COMMENT" -j DROP
   if command -v ip6tables >/dev/null 2>&1 && [ -s /proc/net/if_inet6 ]; then
     ip6tables -w -C INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
       ip6tables -w -I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP
   fi
-  iptables -w -C FORWARD -i wdtt0 -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
-    iptables -w -I FORWARD -i wdtt0 -m comment --comment "$COMMENT" -j ACCEPT
-  iptables -w -C FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
-    iptables -w -I FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -o wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
+    iptables -w -I FORWARD 1 -o wdtt0 -m comment --comment "$COMMENT" -j DROP
+  iptables -w -C FORWARD -i wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
+    iptables -w -I FORWARD 1 -i wdtt0 -m comment --comment "$COMMENT" -j DROP
+  iptables -w -C FORWARD -i "$WAN" -o wdtt0 -d "$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
+    iptables -w -I FORWARD 1 -i "$WAN" -o wdtt0 -d "$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -i wdtt0 -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
+    iptables -w -I FORWARD 1 -i wdtt0 -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j ACCEPT
+  iptables -w -C FORWARD -i wdtt0 -o wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
+    iptables -w -I FORWARD 1 -i wdtt0 -o wdtt0 -m comment --comment "$COMMENT" -j DROP
   iptables -w -t nat -C POSTROUTING -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j MASQUERADE 2>/dev/null || \
     iptables -w -t nat -A POSTROUTING -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j MASQUERADE
   iptables -w -t mangle -C FORWARD -s "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \

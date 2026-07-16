@@ -195,9 +195,15 @@ cleanup_firewall_rules_for() {
     delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j ACCEPT
     delete_iptables_rule filter FORWARD -o wdtt0 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
+    delete_iptables_rule filter INPUT -i wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -i wdtt0 -o wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -i wdtt0 -m comment --comment "$comment" -j DROP
+    delete_iptables_rule filter FORWARD -o wdtt0 -m comment --comment "$comment" -j DROP
     delete_iptables_rule mangle FORWARD -s "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     delete_iptables_rule mangle FORWARD -d "$subnet" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$comment" -j TCPMSS --clamp-mss-to-pmtu
     for iface in $(ls /sys/class/net 2>/dev/null || true); do
+      delete_iptables_rule filter FORWARD -i wdtt0 -s "$subnet" -o "$iface" -m comment --comment "$comment" -j ACCEPT
+      delete_iptables_rule filter FORWARD -i "$iface" -o wdtt0 -d "$subnet" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$comment" -j ACCEPT
       delete_iptables_rule nat POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$comment" -j MASQUERADE
     done
   done

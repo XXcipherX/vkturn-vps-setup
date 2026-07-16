@@ -79,6 +79,10 @@ check_systemd_installer() {
     [ "$(stat -c '%a' "$WDTT_ENV_FILE")" = 600 ] || fail "systemd environment file is not mode 600"
     assert_contains "$WDTT_FIREWALL_SCRIPT" 'block_external_wg "$WG"'
     assert_contains "$WDTT_FIREWALL_SCRIPT" 'add_input_udp "$DTLS"'
+    assert_contains "$WDTT_FIREWALL_SCRIPT" '-I INPUT 1 -i "$IFACE"'
+    assert_contains "$WDTT_FIREWALL_SCRIPT" '-I FORWARD 1 -i "$IFACE" -o "$IFACE"'
+    assert_contains "$WDTT_FIREWALL_SCRIPT" '-s "$SUBNET" -o "$wan"'
+    assert_contains "$WDTT_FIREWALL_SCRIPT" '--ctstate RELATED,ESTABLISHED'
     assert_contains "$WDTT_RUN_SCRIPT" "export PATH=\"$WDTT_NO_FIREWALL_BIN\""
     assert_contains "$WDTT_RUN_SCRIPT" '-password="${WDTT_PASSWORD}"'
 
@@ -143,6 +147,10 @@ check_docker_installer() {
     fail "Docker entrypoint changes SSH access policy"
   fi
   assert_contains "$out/run-wdtt.sh" '-I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT"'
+  assert_contains "$out/run-wdtt.sh" '-I INPUT 1 -i wdtt0'
+  assert_contains "$out/run-wdtt.sh" '-I FORWARD 1 -i wdtt0 -o wdtt0'
+  assert_contains "$out/run-wdtt.sh" '-s "$SUBNET" -o "$WAN"'
+  assert_contains "$out/run-wdtt.sh" '--ctstate RELATED,ESTABLISHED'
   assert_contains "$out/run-wdtt.sh" "trap 'cleanup_rules || true' EXIT"
   assert_contains "$out/run-wdtt.sh" 'export PATH="$NO_FIREWALL_BIN"'
   assert_contains "$ROOT/vps-setup.sh" "grep -F '[SERVER] Готов'"
