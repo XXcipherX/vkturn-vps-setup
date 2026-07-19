@@ -2,7 +2,7 @@
 
 Автоматический установщик WDTT/VK TURN VPS-сервера для использования с iOS-клиентом `vk-turn-proxy-ios` в режиме **SRTP-WRAP-A**.
 
-Скрипт рассчитан на чистый VPS с Linux и `systemd`. Он сам ставит зависимости, скачивает Go при необходимости, собирает `wdtt-server` из исходников Android-проекта, настраивает `systemd`, `ip_forward`, NAT и firewall-правила, а в конце печатает готовую `wdtt://` ссылку для импорта в iPhone.
+Скрипт рассчитан на чистый VPS с Linux и `systemd`. Он сам ставит зависимости, скачивает Go при необходимости, собирает `wdtt-server` из исходников Android-проекта, настраивает `systemd`, `ip_forward` и внешние firewall-правила, а в конце печатает готовую `wdtt://` ссылку для импорта в iPhone. NAT, FORWARD и изоляцией интерфейса `wdtt0` управляет сам server core.
 
 ## Какой стек используется
 
@@ -106,11 +106,12 @@ sudo bash vps-setup.sh
 /opt/vkturn-vps-setup/.env
 /opt/vkturn-vps-setup/run-wdtt.sh
 /opt/vkturn-vps-setup/data/
+/opt/vkturn-vps-setup/backups/
 ```
 
 `docker-compose.yml`, `.env` и `run-wdtt.sh` генерируются из файлов в `templates_for_script`.
-При повторном запуске сохраненные пароль, порты, DNS, Telegram-параметры, image,
-режим firewall и данные для ссылки используются как значения по умолчанию. Новый
+При повторном запуске сохраненные пароль, порты, DNS, Telegram-параметры, image
+и данные для ссылки используются как значения по умолчанию. Новый
 пароль устанавливается только если его явно ввести; пустой ввод сохраняет текущий.
 
 Если нужен другой тег или свой registry, можно переопределить image:
@@ -119,9 +120,11 @@ sudo bash vps-setup.sh
 sudo WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest bash vps-setup.sh
 ```
 
-Контейнер запускается с `network_mode: host`, `privileged: true` и доступом к `/dev/net/tun`, потому что WDTT создает WireGuard-интерфейс и настраивает NAT. По умолчанию entrypoint добавляет host `iptables` правила с комментарием `WDTT_DOCKER`: открывает только публичный DTLS-порт, блокирует прямой внешний доступ к внутреннему WireGuard-порту, изолирует VPN-клиентов друг от друга и от сервисов VPS и разрешает только направленный WAN NAT/FORWARD с обратным `RELATED,ESTABLISHED` трафиком. SSH-порт установщик не открывает. Ошибка применения обязательного правила прерывает запуск, а `vps-setup.sh` ждет сообщения готовности сервера и показывает логи при неудаче.
+Переопределяемый image должен содержать актуальный server core, который сам владеет правилами `WDTT_MANAGED`. Старые образы, рассчитывающие на NAT/FORWARD установщика, с этой версией не поддерживаются.
 
-Если firewall ведется вручную, на вопрос `Manage host iptables/NAT rules for WDTT?` ответь `n`. В этом режиме установщик скрывает `iptables` и `nft` также от server core, поэтому внешний DTLS-доступ, блокировку WG-порта, NAT и FORWARD необходимо настроить самостоятельно. При штатном `docker compose down` entrypoint удаляет правила `WDTT_DOCKER` и `WDTT_MANAGED`; повторный запуск установщика также очищает правила со старыми портами.
+Контейнер запускается с `network_mode: host`, `privileged: true` и доступом к `/dev/net/tun`, потому что WDTT создает WireGuard-интерфейс и настраивает NAT. Entry point добавляет только правила своей зоны ответственности с комментарием `WDTT_DOCKER`: открывает публичный DTLS-порт, блокирует прямой внешний доступ к внутреннему WireGuard-порту и применяет TCPMSS clamp. NAT, направленный FORWARD, запрет доступа к VPS через `wdtt0` и изоляцию VPN-клиентов устанавливает server core с комментарием `WDTT_MANAGED`. SSH-порт установщик не открывает. Ошибка применения обязательного правила прерывает запуск, а `vps-setup.sh` ждёт сообщения готовности сервера и показывает логи при неудаче.
+
+Текущий server core требует `iptables`, поэтому ранее существовавший режим `WDTT_NO_FIREWALL` удалён. При штатном `docker compose down` entry point удаляет правила `WDTT_DOCKER` и `WDTT_MANAGED`; повторный запуск установщика также очищает правила со старыми портами. Перед обновлением `passwords.json` автоматически копируется в `/opt/vkturn-vps-setup/backups/`.
 
 Команды после установки:
 
@@ -293,15 +296,16 @@ WG port: 56001
 Команда `install` выполняет:
 
 1. Определяет Linux-дистрибутив.
-2. Ставит системные зависимости: `curl`, `git`, `iproute2`, `iptables`, `nftables`, `procps`, `psmisc`.
+2. Ставит системные зависимости: `curl`, `git`, `iproute2`, `iptables`, `procps`, `psmisc`.
 3. Проверяет Go. Если системный Go старее нужного, скачивает Go в `/opt/wdtt/go`.
 4. Клонирует актуальную ветку `main-new` из `https://github.com/XXcipherX/proxy-turn-vk-android.git` в `/opt/wdtt/source`.
 5. Собирает многофайловый Go-модуль из `app/src/main/assets/linux-server` в `/usr/local/bin/wdtt-server`.
 6. Создает `/etc/wdtt/wdtt.env` с параметрами установки.
 7. Включает `net.ipv4.ip_forward`.
-8. Создает `/usr/local/lib/wdtt/apply-firewall.sh` и runtime helper для совместимости режима `--no-firewall` с текущим server core.
-9. Создает `wdtt-firewall.service`, чтобы правила NAT/firewall применялись после перезагрузки.
-10. Создает и запускает `wdtt.service`, затем проверяет, что сервис активен.
+8. Создает `/usr/local/lib/wdtt/apply-firewall.sh` для DTLS ingress, блокировки внешнего WG-порта и TCPMSS.
+9. Создает `wdtt-firewall.service`, чтобы эти правила применялись после перезагрузки.
+10. Перед обновлением сохраняет копию `passwords.json` в `/etc/wdtt/backups/`.
+11. Создает и запускает `wdtt.service`, затем проверяет, что сервис активен.
 
 Проверка:
 
@@ -369,14 +373,12 @@ sudo /tmp/vkturn-install.sh uninstall --purge
 --dtls-port / WDTT_DTLS_PORT     публичный UDP-порт, default 56000
 --wg-port / WDTT_WG_PORT         внутренний WG UDP-порт, default 56001
 --ssh-port / WDTT_SSH_PORT       SSH TCP-порт для совместимости и очистки старых правил, default 22
---dns / WDTT_DNS                 DNS для клиентов, default 1.1.1.1,1.0.0.1
+--dns / WDTT_DNS                 IPv4 DNS для клиентов, default 1.1.1.1,1.0.0.1
 --admin-id / WDTT_ADMIN_ID       Telegram admin ID, optional
 --bot-token / WDTT_BOT_TOKEN     Telegram bot token, optional
 --source-repo / WDTT_SOURCE_REPO репозиторий для сборки wdtt-server, default XXcipherX/proxy-turn-vk-android
 --source-ref / WDTT_SOURCE_REF   branch, tag или commit, default main-new
 --go-version / WDTT_GO_VERSION   Go version, default 1.25.0
---no-firewall / WDTT_NO_FIREWALL не применять iptables/nft правила ни установщиком, ни server core
---with-firewall                  снова включить managed iptables после --no-firewall
 ```
 
 При повторном запуске параметры, переданные флагами или переменными окружения, имеют приоритет над сохраненными значениями из `/etc/wdtt/wdtt.env`.
@@ -413,11 +415,11 @@ sudo /tmp/vkturn-install.sh install \
 22/tcp или твой SSH-порт - настрой отдельно по своей политике доступа
 ```
 
-Установщик не открывает SSH-порт самостоятельно, блокирует вход к WireGuard-порту
-со всех интерфейсов, кроме loopback, запрещает доступ клиентов к самому VPS через
-`wdtt0` и передачу пакетов между VPN-клиентами. В WAN разрешен только исходящий
-трафик подсети WDTT и связанный обратный трафик. Если используется `--no-firewall`,
-эти правила, NAT и FORWARD нужно настроить вручную до запуска WDTT.
+Установщик не открывает SSH-порт самостоятельно, открывает DTLS и блокирует вход
+к WireGuard-порту со всех интерфейсов, кроме loopback. Server core запрещает доступ
+клиентов к самому VPS через `wdtt0` и передачу пакетов между VPN-клиентами. В WAN
+разрешён только исходящий трафик фиксированной подсети `10.66.66.0/24` и связанный
+обратный трафик. Для запуска обязательны `iptables` и включённый IPv4 forwarding.
 
 Если меняешь `--dtls-port`, в iOS нужно указывать именно его:
 
@@ -452,12 +454,13 @@ ss -lunp | grep -E ':(56000|56001)\b'
 
 ```bash
 iptables -S | grep WDTT_SETUP
-iptables -t nat -S | grep WDTT_SETUP
 iptables -t mangle -S | grep WDTT_SETUP
+iptables -S | grep WDTT_MANAGED
+iptables -t nat -S | grep WDTT_MANAGED
 ```
 
-Для Docker-варианта замени `WDTT_SETUP` на `WDTT_DOCKER`; правила, добавленные
-самим server core, имеют комментарий `WDTT_MANAGED`.
+Для Docker-варианта замени `WDTT_SETUP` на `WDTT_DOCKER`. Установщик владеет
+только ingress/WG-block/TCPMSS правилами, а `WDTT_MANAGED` принадлежит server core.
 
 Типичные ошибки:
 
@@ -487,15 +490,18 @@ Bootstrap timeout на iOS
 ```bash
 sudo /tmp/vkturn-install.sh install \
   --password "$WDTT_PASS" \
-  --source-ref "b154ce94d7a85c862bf1f301e75966a1b71a9b86"
+  --source-ref "f10a6c8740dec0fd0ada8d37d9c33f7ec602ea16"
 ```
+
+Закреплённый ref должен содержать актуальный контракт firewall, в котором server core владеет `WDTT_MANAGED` NAT/FORWARD/изоляцией. Более старые версии ядра с новым установщиком не поддерживаются.
 
 При повторном запуске:
 
 - исходники обновятся в `/opt/wdtt/source`;
 - бинарник пересоберется;
 - `wdtt.service` перезапустится;
-- база устройств и паролей в `/etc/wdtt/passwords.json` сохранится.
+- база устройств и паролей в `/etc/wdtt/passwords.json` сохранится;
+- перед заменой создастся резервная копия `/etc/wdtt/backups/passwords-*.json`.
 
 ## Безопасность
 
@@ -510,8 +516,9 @@ sudo /tmp/vkturn-install.sh install \
 Workflow `.github/workflows/smoke.yml` запускается при каждом push, при создании
 или обновлении pull request и вручную через GitHub Actions. Он проверяет синтаксис
 и ShellCheck всех shell-скриптов, YAML, генерацию конфигурации обоих установщиков,
-Docker Compose для WDTT и Free Turn, права secret-файлов, валидацию входных данных,
-firewall-инварианты и синхронизацию ключевых ссылок в README.
+Docker Compose для WDTT и Free Turn, права secret-файлов, IPv4 DNS и фиксированную
+подсеть, резервное копирование БД, разделение владельцев firewall-правил и
+синхронизацию ключевых ссылок в README.
 
 Тот же набор smoke-тестов можно запустить локально на Linux, если установлены
 `shellcheck`, `envsubst` и Docker Compose:

@@ -24,8 +24,7 @@ WDTT_SSH_PORT="${WDTT_SSH_PORT:-}"
 WDTT_DNS="${WDTT_DNS:-}"
 WDTT_ADMIN_ID="${WDTT_ADMIN_ID:-}"
 WDTT_BOT_TOKEN="${WDTT_BOT_TOKEN:-}"
-WDTT_NO_FIREWALL="${WDTT_NO_FIREWALL:-}"
-WDTT_SUBNET="${WDTT_SUBNET:-}"
+WDTT_SUBNET="${WDTT_SUBNET:-10.66.66.0/24}"
 
 PREVIOUS_DTLS_PORT=""
 PREVIOUS_WG_PORT=""
@@ -68,8 +67,6 @@ load_saved_config() {
   WDTT_DNS="${WDTT_DNS:-$(saved_value WDTT_DNS)}"
   [ "$WDTT_ADMIN_ID_SET" = 1 ] || WDTT_ADMIN_ID="$(saved_value WDTT_ADMIN_ID)"
   [ "$WDTT_BOT_TOKEN_SET" = 1 ] || WDTT_BOT_TOKEN="$(saved_value WDTT_BOT_TOKEN)"
-  WDTT_NO_FIREWALL="${WDTT_NO_FIREWALL:-$(saved_value WDTT_NO_FIREWALL)}"
-  WDTT_SUBNET="${WDTT_SUBNET:-$PREVIOUS_SUBNET}"
 }
 
 strip_hash() {
@@ -104,6 +101,33 @@ validate_ipv4_cidr() {
   for octet in "${octets[@]}"; do
     case "$octet" in ''|*[!0-9]*) die "WDTT_SUBNET must contain a valid IPv4 address." ;; esac
     [ "$octet" -le 255 ] || die "WDTT_SUBNET must contain a valid IPv4 address."
+  done
+}
+
+validate_ipv4_address() {
+  local value="$1" octets=() octet
+  IFS='.' read -r -a octets <<< "$value"
+  [ "${#octets[@]}" -eq 4 ] || return 1
+  for octet in "${octets[@]}"; do
+    case "$octet" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    if [ "$octet" != "0" ] && [ "${octet#0}" != "$octet" ]; then
+      return 1
+    fi
+    [ "$octet" -le 255 ] || return 1
+  done
+}
+
+validate_dns_servers() {
+  local servers="$1" values=() server
+  case "$servers" in
+    ,*|*,|*,,*) die "WDTT_DNS must be a comma-separated list of IPv4 addresses without empty entries." ;;
+  esac
+  IFS=',' read -r -a values <<< "$servers"
+  [ "${#values[@]}" -gt 0 ] || die "WDTT_DNS must contain at least one IPv4 address."
+  for server in "${values[@]}"; do
+    validate_ipv4_address "$server" || die "WDTT_DNS entry must be an IPv4 address, got: $server"
   done
 }
 
@@ -148,14 +172,14 @@ validate_config() {
     die "Password must be 8-128 chars and contain only A-Z, a-z, 0-9, dot, underscore and dash."
   printf '%s\n' "$WDTT_DOCKER_IMAGE" | grep -Eq '^[A-Za-z0-9._/:@-]+$' || \
     die "WDTT_DOCKER_IMAGE contains unsupported characters."
-  printf '%s\n' "$WDTT_DNS" | grep -Eq '^[A-Za-z0-9.,:]+$' || die "WDTT_DNS contains unsupported characters."
+  validate_dns_servers "$WDTT_DNS"
   validate_ipv4_cidr "$WDTT_SUBNET"
+  [ "$WDTT_SUBNET" = "10.66.66.0/24" ] || die "WDTT_SUBNET is fixed by the current server core at 10.66.66.0/24."
   printf '%s\n' "$WDTT_PUBLIC_HOST" | grep -Eq '^[A-Za-z0-9._-]*$' || \
     die "WDTT_PUBLIC_HOST must be an IP address or domain without scheme, path, or port."
   printf '%s\n' "$WDTT_VK_HASH" | grep -Eq '^[A-Za-z0-9._-]+$' || die "VK call hash contains unsupported characters."
   [ -z "$WDTT_ADMIN_ID" ] || printf '%s\n' "$WDTT_ADMIN_ID" | grep -Eq '^[0-9]+$' || die "WDTT_ADMIN_ID must be numeric."
   printf '%s\n' "$WDTT_BOT_TOKEN" | grep -Eq '^[A-Za-z0-9._:@-]*$' || die "WDTT_BOT_TOKEN contains unsupported characters."
-  case "$WDTT_NO_FIREWALL" in 0|1) ;; *) die "WDTT_NO_FIREWALL must be 0 or 1." ;; esac
 }
 
 delete_iptables_rule() {
@@ -214,6 +238,20 @@ cleanup_firewall_rules() {
   if [ -n "$PREVIOUS_DTLS_PORT$PREVIOUS_WG_PORT$PREVIOUS_SSH_PORT" ]; then
     cleanup_firewall_rules_for "$PREVIOUS_DTLS_PORT" "$PREVIOUS_WG_PORT" "$PREVIOUS_SSH_PORT" "$PREVIOUS_SUBNET"
   fi
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet wdtt >/dev/null 2>&1 || true
+  fi
+}
+
+backup_database() {
+  local source="$INSTALL_DIR/data/passwords.json" backup_dir="$INSTALL_DIR/backups" backup
+  [ -f "$source" ] || return 0
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  backup="$backup_dir/passwords-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+  cp -p -- "$source" "$backup"
+  chmod 600 "$backup"
+  echo "Backed up WDTT database to $backup"
 }
 
 wait_for_ready() {
@@ -254,7 +292,6 @@ main() {
   WDTT_WG_PORT="${WDTT_WG_PORT:-56001}"
   WDTT_SSH_PORT="${WDTT_SSH_PORT:-22}"
   WDTT_DNS="${WDTT_DNS:-1.1.1.1,1.0.0.1}"
-  WDTT_NO_FIREWALL="${WDTT_NO_FIREWALL:-0}"
   WDTT_SUBNET="${WDTT_SUBNET:-10.66.66.0/24}"
 
   install_packages
@@ -271,7 +308,7 @@ main() {
   fi
   docker info >/dev/null 2>&1 || die "Docker daemon is not available."
 
-  local input_password="" input_vk_link="" input_public_host="" input_dtls="" input_wg="" input_fw=""
+  local input_password="" input_vk_link="" input_public_host="" input_dtls="" input_wg=""
   if [ -n "$WDTT_PASSWORD" ]; then
     read -rsp "Enter WDTT password (empty = keep current): " input_password
   else
@@ -290,15 +327,8 @@ main() {
   read -erp "Enter internal WireGuard UDP port [$WDTT_WG_PORT]: " input_wg
   WDTT_WG_PORT="${input_wg:-$WDTT_WG_PORT}"
 
-  if [ "$WDTT_NO_FIREWALL" = 1 ]; then
-    read -erp "Manage host iptables/NAT rules for WDTT? [y/N]: " input_fw
-    case "${input_fw,,}" in y|yes) WDTT_NO_FIREWALL=0 ;; *) WDTT_NO_FIREWALL=1 ;; esac
-  else
-    read -erp "Manage host iptables/NAT rules for WDTT? [Y/n]: " input_fw
-    case "${input_fw,,}" in n|no) WDTT_NO_FIREWALL=1 ;; *) WDTT_NO_FIREWALL=0 ;; esac
-  fi
-
   validate_config
+  backup_database
 
   if [ -f "$COMPOSE_FILE" ]; then
     docker compose -f "$COMPOSE_FILE" down
@@ -311,13 +341,13 @@ main() {
   chmod 0755 "$INSTALL_DIR/run-wdtt.sh"
 
   export WDTT_DOCKER_IMAGE WDTT_PASSWORD WDTT_VK_HASH WDTT_PUBLIC_HOST
-  export WDTT_DTLS_PORT WDTT_WG_PORT WDTT_SSH_PORT WDTT_DNS WDTT_NO_FIREWALL
-  export WDTT_ADMIN_ID WDTT_BOT_TOKEN WDTT_SUBNET
+  export WDTT_DTLS_PORT WDTT_WG_PORT WDTT_SSH_PORT WDTT_DNS
+  export WDTT_ADMIN_ID WDTT_BOT_TOKEN
 
   envsubst '$WDTT_DOCKER_IMAGE' \
     < "$SCRIPT_DIR/templates_for_script/compose" \
     > "$COMPOSE_FILE"
-  envsubst '$WDTT_DOCKER_IMAGE $WDTT_PASSWORD $WDTT_VK_HASH $WDTT_PUBLIC_HOST $WDTT_DTLS_PORT $WDTT_WG_PORT $WDTT_SSH_PORT $WDTT_DNS $WDTT_ADMIN_ID $WDTT_BOT_TOKEN $WDTT_NO_FIREWALL $WDTT_SUBNET' \
+  envsubst '$WDTT_DOCKER_IMAGE $WDTT_PASSWORD $WDTT_VK_HASH $WDTT_PUBLIC_HOST $WDTT_DTLS_PORT $WDTT_WG_PORT $WDTT_SSH_PORT $WDTT_DNS $WDTT_ADMIN_ID $WDTT_BOT_TOKEN' \
     < "$SCRIPT_DIR/templates_for_script/env" \
     > "$ENV_FILE"
   chmod 600 "$ENV_FILE"

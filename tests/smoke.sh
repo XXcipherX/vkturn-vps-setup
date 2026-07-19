@@ -23,6 +23,13 @@ assert_contains() {
   grep -Fq -- "$text" "$file" || fail "$file does not contain: $text"
 }
 
+assert_not_contains() {
+  local file="$1" text="$2"
+  if grep -Fq -- "$text" "$file"; then
+    fail "$file unexpectedly contains: $text"
+  fi
+}
+
 assert_no_unresolved() {
   local pattern="$1"
   shift
@@ -58,7 +65,6 @@ check_systemd_installer() {
     export WDTT_ENV_FILE="$out/etc/wdtt/wdtt.env"
     export WDTT_FIREWALL_SCRIPT="$out/usr/local/lib/wdtt/apply-firewall.sh"
     export WDTT_RUN_SCRIPT="$out/usr/local/lib/wdtt/run-wdtt.sh"
-    export WDTT_NO_FIREWALL_BIN="$out/usr/local/lib/wdtt/no-firewall-bin"
 
     # shellcheck source=../install.sh
     source "$ROOT/install.sh"
@@ -70,6 +76,9 @@ check_systemd_installer() {
     DNS_SERVERS=1.1.1.1,1.0.0.1
     validate_inputs
     validate_password
+    mkdir -p "$WDTT_CONFIG_DIR"
+    printf '{"passwords":{},"devices":{}}\n' > "$WDTT_CONFIG_DIR/passwords.json"
+    backup_database
     write_env_file
     write_firewall_script
     write_runtime_script
@@ -79,15 +88,26 @@ check_systemd_installer() {
     [ "$(stat -c '%a' "$WDTT_ENV_FILE")" = 600 ] || fail "systemd environment file is not mode 600"
     assert_contains "$WDTT_FIREWALL_SCRIPT" 'block_external_wg "$WG"'
     assert_contains "$WDTT_FIREWALL_SCRIPT" 'add_input_udp "$DTLS"'
-    assert_contains "$WDTT_FIREWALL_SCRIPT" '-I INPUT 1 -i "$IFACE"'
-    assert_contains "$WDTT_FIREWALL_SCRIPT" '-I FORWARD 1 -i "$IFACE" -o "$IFACE"'
-    assert_contains "$WDTT_FIREWALL_SCRIPT" '-s "$SUBNET" -o "$wan"'
-    assert_contains "$WDTT_FIREWALL_SCRIPT" '--ctstate RELATED,ESTABLISHED'
-    assert_contains "$WDTT_RUN_SCRIPT" "export PATH=\"$WDTT_NO_FIREWALL_BIN\""
+    assert_contains "$WDTT_FIREWALL_SCRIPT" 'TCPMSS --clamp-mss-to-pmtu'
+    assert_not_contains "$WDTT_FIREWALL_SCRIPT" 'INPUT -i "$IFACE"'
+    assert_not_contains "$WDTT_FIREWALL_SCRIPT" 'FORWARD -i "$IFACE"'
+    assert_not_contains "$WDTT_FIREWALL_SCRIPT" 'MASQUERADE'
+    assert_not_contains "$WDTT_RUN_SCRIPT" 'export PATH='
     assert_contains "$WDTT_RUN_SCRIPT" '-password="${WDTT_PASSWORD}"'
+    [ "$(find "$WDTT_CONFIG_DIR/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "systemd installer did not back up passwords.json"
+    [ "$(stat -c '%a' "$WDTT_CONFIG_DIR/backups")" = 700 ] || fail "systemd backup directory is not mode 700"
 
     if (DTLS_PORT=56000; WG_PORT=56000; validate_inputs >/dev/null 2>&1); then
       fail "systemd installer accepted colliding DTLS and WG ports"
+    fi
+    if (DNS_SERVERS=2606:4700:4700::1111; validate_inputs >/dev/null 2>&1); then
+      fail "systemd installer accepted an IPv6 DNS server"
+    fi
+    if (DNS_SERVERS=1.1.1.1,; validate_inputs >/dev/null 2>&1); then
+      fail "systemd installer accepted an empty DNS entry"
+    fi
+    if (parse_args --no-firewall >/dev/null 2>&1); then
+      fail "systemd installer accepted the removed no-firewall mode"
     fi
   )
 
@@ -117,20 +137,29 @@ check_docker_installer() {
     WDTT_DNS=1.1.1.1,1.0.0.1
     WDTT_ADMIN_ID=
     WDTT_BOT_TOKEN=
-    WDTT_NO_FIREWALL=0
     WDTT_SUBNET=10.66.66.0/24
     validate_config
 
     if (WDTT_DTLS_PORT=56000; WDTT_WG_PORT=56000; validate_config >/dev/null 2>&1); then
       fail "Docker installer accepted colliding DTLS and WG ports"
     fi
-    if (WDTT_SUBNET=10.999.0.0/24; validate_config >/dev/null 2>&1); then
-      fail "Docker installer accepted an invalid subnet"
+    if (WDTT_SUBNET=10.77.0.0/24; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a subnet unsupported by server core"
     fi
+    if (WDTT_DNS=2001:4860:4860::8888; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted an IPv6 DNS server"
+    fi
+    if (WDTT_DNS=1.1.1.1,; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted an empty DNS entry"
+    fi
+
+    INSTALL_DIR="$out"
+    printf '{"passwords":{},"devices":{}}\n' > "$INSTALL_DIR/data/passwords.json"
+    backup_database
 
     export WDTT_DOCKER_IMAGE WDTT_PASSWORD WDTT_VK_HASH WDTT_PUBLIC_HOST
     export WDTT_DTLS_PORT WDTT_WG_PORT WDTT_SSH_PORT WDTT_DNS WDTT_ADMIN_ID
-    export WDTT_BOT_TOKEN WDTT_NO_FIREWALL WDTT_SUBNET
+    export WDTT_BOT_TOKEN WDTT_SUBNET
     envsubst < "$ROOT/templates_for_script/compose" > "$out/docker-compose.yml"
     envsubst < "$ROOT/templates_for_script/env" > "$out/.env"
   )
@@ -139,6 +168,8 @@ check_docker_installer() {
   sh -n "$out/run-wdtt.sh"
   docker compose --env-file "$out/.env" -f "$out/docker-compose.yml" config --quiet
   assert_no_unresolved '\$WDTT_[A-Z0-9_]+' "$out/.env" "$out/docker-compose.yml"
+  assert_not_contains "$out/.env" 'WDTT_NO_FIREWALL='
+  assert_not_contains "$out/.env" 'WDTT_SUBNET='
 
   if grep -Eq 'iptables .*(-I|-A) INPUT .*WDTT_WG_PORT.*-j ACCEPT' "$out/run-wdtt.sh"; then
     fail "Docker entrypoint exposes the internal WireGuard port"
@@ -147,15 +178,17 @@ check_docker_installer() {
     fail "Docker entrypoint changes SSH access policy"
   fi
   assert_contains "$out/run-wdtt.sh" '-I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT"'
-  assert_contains "$out/run-wdtt.sh" '-I INPUT 1 -i wdtt0'
-  assert_contains "$out/run-wdtt.sh" '-I FORWARD 1 -i wdtt0 -o wdtt0'
-  assert_contains "$out/run-wdtt.sh" '-s "$SUBNET" -o "$WAN"'
-  assert_contains "$out/run-wdtt.sh" '--ctstate RELATED,ESTABLISHED'
+  assert_contains "$out/run-wdtt.sh" 'TCPMSS --clamp-mss-to-pmtu'
+  assert_not_contains "$out/run-wdtt.sh" '-I INPUT 1 -i wdtt0'
+  assert_not_contains "$out/run-wdtt.sh" 'iptables -w -I FORWARD'
+  assert_not_contains "$out/run-wdtt.sh" '-A POSTROUTING'
   assert_contains "$out/run-wdtt.sh" "trap 'cleanup_rules || true' EXIT"
-  assert_contains "$out/run-wdtt.sh" 'export PATH="$NO_FIREWALL_BIN"'
+  assert_not_contains "$out/run-wdtt.sh" 'export PATH='
   assert_contains "$ROOT/vps-setup.sh" "grep -F '[SERVER] Готов'"
   assert_contains "$ROOT/vps-setup.sh" 'load_saved_config'
   assert_contains "$ROOT/vps-setup.sh" 'chmod 600 "$ENV_FILE"'
+  [ "$(find "$out/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "Docker installer did not back up passwords.json"
+  [ "$(stat -c '%a' "$out/backups")" = 700 ] || fail "Docker backup directory is not mode 700"
   pass "Docker installer validation, rendering, Compose config, and firewall invariants"
 }
 

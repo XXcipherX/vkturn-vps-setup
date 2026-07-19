@@ -7,7 +7,7 @@ set -eu
 : "${WDTT_DNS:?WDTT_DNS is required}"
 
 COMMENT=WDTT_DOCKER
-SUBNET="${WDTT_SUBNET:-10.66.66.0/24}"
+SUBNET=10.66.66.0/24
 SERVER_PID=""
 
 delete_iptables_rule() {
@@ -64,12 +64,7 @@ cleanup_rules() {
 
 apply_rules() {
   command -v iptables >/dev/null 2>&1 || {
-    echo "iptables is required when WDTT firewall management is enabled" >&2
-    return 1
-  }
-  WAN="$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')"
-  [ -n "$WAN" ] || {
-    echo "Unable to detect the default WAN interface" >&2
+    echo "iptables is required by the current WDTT server" >&2
     return 1
   }
 
@@ -77,24 +72,10 @@ apply_rules() {
     iptables -w -I INPUT -p udp --dport "$WDTT_DTLS_PORT" -m comment --comment "$COMMENT" -j ACCEPT
   iptables -w -C INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
     iptables -w -I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP
-  iptables -w -C INPUT -i wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
-    iptables -w -I INPUT 1 -i wdtt0 -m comment --comment "$COMMENT" -j DROP
   if command -v ip6tables >/dev/null 2>&1 && [ -s /proc/net/if_inet6 ]; then
     ip6tables -w -C INPUT ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
       ip6tables -w -I INPUT 1 ! -i lo -p udp --dport "$WDTT_WG_PORT" -m comment --comment "$COMMENT" -j DROP
   fi
-  iptables -w -C FORWARD -o wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
-    iptables -w -I FORWARD 1 -o wdtt0 -m comment --comment "$COMMENT" -j DROP
-  iptables -w -C FORWARD -i wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
-    iptables -w -I FORWARD 1 -i wdtt0 -m comment --comment "$COMMENT" -j DROP
-  iptables -w -C FORWARD -i "$WAN" -o wdtt0 -d "$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
-    iptables -w -I FORWARD 1 -i "$WAN" -o wdtt0 -d "$SUBNET" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment "$COMMENT" -j ACCEPT
-  iptables -w -C FORWARD -i wdtt0 -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null || \
-    iptables -w -I FORWARD 1 -i wdtt0 -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j ACCEPT
-  iptables -w -C FORWARD -i wdtt0 -o wdtt0 -m comment --comment "$COMMENT" -j DROP 2>/dev/null || \
-    iptables -w -I FORWARD 1 -i wdtt0 -o wdtt0 -m comment --comment "$COMMENT" -j DROP
-  iptables -w -t nat -C POSTROUTING -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j MASQUERADE 2>/dev/null || \
-    iptables -w -t nat -A POSTROUTING -s "$SUBNET" -o "$WAN" -m comment --comment "$COMMENT" -j MASQUERADE
   iptables -w -t mangle -C FORWARD -s "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
     iptables -w -t mangle -I FORWARD -s "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT" -j TCPMSS --clamp-mss-to-pmtu
   iptables -w -t mangle -C FORWARD -d "$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "$COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
@@ -123,19 +104,7 @@ trap 'handle_signal TERM' TERM
 ip link show wdtt0 >/dev/null 2>&1 && ip link del wdtt0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 cleanup_rules
-
-if [ "${WDTT_NO_FIREWALL:-0}" = 1 ]; then
-  NO_FIREWALL_BIN=/usr/local/lib/wdtt/no-firewall-bin
-  mkdir -p "$NO_FIREWALL_BIN"
-  for command_name in ip sysctl bash awk head grep; do
-    command_path="$(command -v "$command_name" 2>/dev/null || true)"
-    [ -n "$command_path" ] || { echo "Required command not found: $command_name" >&2; exit 1; }
-    ln -sf "$command_path" "$NO_FIREWALL_BIN/$command_name"
-  done
-  export PATH="$NO_FIREWALL_BIN"
-else
-  apply_rules
-fi
+apply_rules
 
 /usr/local/bin/wdtt-server \
   -listen="0.0.0.0:${WDTT_DTLS_PORT}" \
