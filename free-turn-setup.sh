@@ -29,9 +29,10 @@ FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"
 FREE_TURN_ENABLE_CLIENTS_FILE="${FREE_TURN_ENABLE_CLIENTS_FILE:-1}"
 FREE_TURN_NO_FIREWALL="${FREE_TURN_NO_FIREWALL:-0}"
 FREE_TURN_PUBLIC_HOST="${FREE_TURN_PUBLIC_HOST:-}"
-FREE_TURN_CLIENT_COMMENT="${FREE_TURN_CLIENT_COMMENT:-ios-srtp-wrap-s}"
+FREE_TURN_CLIENT_NAME="${FREE_TURN_CLIENT_NAME:-}"
 ACTION="install"
 ACTION_ARG=""
+ACTION_ARG2=""
 ROTATE_WG_KEYS=0
 FREE_TURN_CLIENT_ID_OVERRIDE=0
 FREE_TURN_NUM_CONNECTIONS_OVERRIDE=0
@@ -54,6 +55,11 @@ valid_hex64() {
 
 valid_client_id() {
   printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._:-]{1,255}$'
+}
+
+valid_client_name() {
+  [ -n "$1" ] && [ "${#1}" -le 64 ] &&
+    printf '%s' "$1" | grep -Eq '^[[:alnum:]][-[:alnum:]_. ]*$'
 }
 
 valid_iface() {
@@ -88,7 +94,8 @@ Usage:
   sudo bash free-turn-setup.sh
   sudo bash free-turn-setup.sh --print-link [vk-link-or-hash]
   sudo bash free-turn-setup.sh --print-qr [vk-link-or-hash]
-  sudo bash free-turn-setup.sh --add-client [client-id]
+  sudo bash free-turn-setup.sh --add-client [client-id] [--client-name <name>]
+  sudo bash free-turn-setup.sh --name-client <client-id> <name>
   sudo bash free-turn-setup.sh --remove-client <client-id>
   sudo bash free-turn-setup.sh --list-clients
   sudo bash free-turn-setup.sh --status
@@ -100,6 +107,7 @@ Usage:
 Options:
   --vk-link <value>       VK call link/hash for the generated iOS import link.
   --client-id <value>     Client ID for generated import links.
+  --client-name <value>   Display name stored separately from the Client ID.
   --connections <1-50>    iOS connection count for the generated import link.
   --rotate-keys           Rotate the WireGuard server key while preserving clients.
   -h, --help              Show this help.
@@ -142,6 +150,13 @@ parse_args() {
         ACTION="remove-client"
         ACTION_ARG="$2"
         shift 2
+        ;;
+      --name-client)
+        [ $# -ge 3 ] && [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "Usage: --name-client <client-id> <name>."
+        ACTION="name-client"
+        ACTION_ARG="$2"
+        ACTION_ARG2="$3"
+        shift 3
         ;;
       --list-clients)
         ACTION="list-clients"
@@ -188,6 +203,11 @@ parse_args() {
         FREE_TURN_CLIENT_ID_OVERRIDE=1
         shift 2
         ;;
+      --client-name)
+        require_arg "$1" "${2:-}"
+        FREE_TURN_CLIENT_NAME="$2"
+        shift 2
+        ;;
       --rotate-keys)
         ROTATE_WG_KEYS=1
         shift
@@ -224,10 +244,19 @@ ensure_docker() {
 
 install_packages() {
   apt-get update
-  apt-get install -y ca-certificates curl gettext-base openssl iproute2 iptables procps
+  apt-get install -y ca-certificates curl gettext-base jq openssl iproute2 iptables procps
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
     apt-get install -y wireguard-tools
   fi
+}
+
+ensure_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+  log "Installing jq for client metadata management..."
+  apt-get update
+  apt-get install -y jq
 }
 
 detect_wan_iface() {
@@ -273,6 +302,7 @@ prompt_config() {
   FREE_TURN_OBF_KEY="${FREE_TURN_OBF_KEY:-${input_obf_key:-$(openssl rand -hex 32)}}"
   read -erp "Client ID, empty = generate: " input_client_id
   FREE_TURN_CLIENT_ID="${FREE_TURN_CLIENT_ID:-${input_client_id:-$(openssl rand -hex 16)}}"
+  ask FREE_TURN_CLIENT_NAME "Client display name, empty = none" "$FREE_TURN_CLIENT_NAME"
   ask FREE_TURN_VK_LINK "VK call link/hash for printed iOS link, empty = placeholder" "$FREE_TURN_VK_LINK"
   ask FREE_TURN_NUM_CONNECTIONS "iOS connections count" "$FREE_TURN_NUM_CONNECTIONS"
   ask_yes_no FREE_TURN_ENABLE_CLIENTS_FILE "Enable server allowlist for this Client ID?" "$FREE_TURN_ENABLE_CLIENTS_FILE"
@@ -310,6 +340,9 @@ validate_config() {
   case "$FREE_TURN_NUM_CONNECTIONS" in ''|*[!0-9]*) die "FREE_TURN_NUM_CONNECTIONS must be numeric." ;; esac
   [ "$FREE_TURN_NUM_CONNECTIONS" -ge 1 ] && [ "$FREE_TURN_NUM_CONNECTIONS" -le 50 ] || die "FREE_TURN_NUM_CONNECTIONS must be 1-50."
   valid_client_id "$FREE_TURN_CLIENT_ID" || die "FREE_TURN_CLIENT_ID must be 1-255 chars: A-Z, a-z, 0-9, dot, underscore, colon or dash."
+  if [ -n "$FREE_TURN_CLIENT_NAME" ]; then
+    valid_client_name "$FREE_TURN_CLIENT_NAME" || die "FREE_TURN_CLIENT_NAME must be 1-64 letters, digits, spaces, dots, underscores or dashes."
+  fi
   if ! printf '%s' "$FREE_TURN_IMAGE" | grep -Eq '^[A-Za-z0-9._/:@-]+$'; then
     die "FREE_TURN_IMAGE contains unsupported characters."
   fi
@@ -490,36 +523,71 @@ set_env_value() {
 read_client_ids() {
   local file="${1:-$(clients_file)}"
   [ -f "$file" ] || return 0
-  awk -F\" '/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*\{\},?[[:space:]]*$/ { print $2 }' "$file"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '(.clients // {}) | keys[]' "$file"
+    return
+  fi
+  awk -F\" '/^    "[^"]+"[[:space:]]*:/ { print $2 }' "$file"
 }
 
-write_client_ids() {
+ensure_clients_json() {
   local file="${1:-$(clients_file)}"
-  shift || true
-
-  local tmp id first
-  declare -A seen=()
-
   mkdir -p "$(dirname "$file")"
+  if [ ! -f "$file" ]; then
+    printf '{\n  "clients": {}\n}\n' > "$file"
+    chmod 600 "$file"
+  fi
+  jq -e 'type == "object" and ((.clients // {}) | type == "object")' "$file" >/dev/null ||
+    die "Invalid clients database: $file"
+}
+
+update_clients_json() {
+  local file="$1" filter="$2" tmp
+  shift 2
+  ensure_jq
+  ensure_clients_json "$file"
   tmp="$file.tmp.$$"
-  {
-    printf '{\n  "clients": {\n'
-    first=1
-    for id in "$@"; do
-      [ -n "$id" ] || continue
-      valid_client_id "$id" || die "Invalid Client ID: $id"
-      [ -z "${seen[$id]+x}" ] || continue
-      seen["$id"]=1
-      if [ "$first" -eq 1 ]; then
-        first=0
-      else
-        printf ',\n'
-      fi
-      printf '    "%s": {}' "$id"
-    done
-    printf '\n  }\n}\n'
-  } > "$tmp"
+  if ! jq "$@" "$filter" "$file" > "$tmp"; then
+    rm -f "$tmp"
+    die "Could not update clients database: $file"
+  fi
+  chmod 600 "$tmp"
   mv "$tmp" "$file"
+}
+
+client_name_in_use() {
+  local file="$1" name="$2" except_id="${3:-}"
+  ensure_jq
+  ensure_clients_json "$file"
+  jq -e --arg name "$name" --arg except "$except_id" '
+    any((.clients // {}) | to_entries[];
+      .key != $except and
+      ((.value.comment // "") | ascii_downcase) == ($name | ascii_downcase))
+  ' "$file" >/dev/null
+}
+
+upsert_client_record() {
+  local file="$1" id="$2" name="${3:-}"
+  valid_client_id "$id" || die "Invalid Client ID: $id"
+  if [ -n "$name" ]; then
+    valid_client_name "$name" || die "Invalid client display name: $name"
+    client_name_in_use "$file" "$name" "$id" && die "Client display name is already in use: $name"
+  fi
+  update_clients_json "$file" '
+    .clients //= {} |
+    if (.clients | has($id)) then
+      if $name == "" then . else .clients[$id].comment = $name end
+    else
+      .clients[$id] = (if $name == "" then {} else {comment: $name} end)
+    end
+  ' --arg id "$id" --arg name "$name"
+}
+
+clear_clients_json() {
+  local file="${1:-$(clients_file)}"
+  ensure_jq
+  mkdir -p "$(dirname "$file")"
+  printf '{\n  "clients": {}\n}\n' > "$file"
   chmod 600 "$file"
 }
 
@@ -547,32 +615,16 @@ client_id_exists() {
 }
 
 add_client_id_to_allowlist() {
-  local id="$1" ids existing
-  ids=()
-  if [ -f "$(clients_file)" ]; then
-    while IFS= read -r existing; do
-      ids+=("$existing")
-    done < <(read_client_ids "$(clients_file)")
-  fi
-  ids+=("$id")
-  write_client_ids "$(clients_file)" "${ids[@]}"
+  local id="$1" name="${2:-}"
+  upsert_client_record "$(clients_file)" "$id" "$name"
   enable_clients_file_in_env
 }
 
 remove_client_id_from_allowlist() {
-  local id="$1" ids existing removed
+  local id="$1"
   [ -f "$(clients_file)" ] || die "Clients file not found: $(clients_file)"
-  ids=()
-  removed=0
-  while IFS= read -r existing; do
-    if [ "$existing" = "$id" ]; then
-      removed=1
-      continue
-    fi
-    ids+=("$existing")
-  done < <(read_client_ids "$(clients_file)")
-  [ "$removed" -eq 1 ] || die "Client ID not found: $id"
-  write_client_ids "$(clients_file)" "${ids[@]}"
+  client_id_exists "$id" || die "Client ID not found: $id"
+  update_clients_json "$(clients_file)" 'del(.clients[$id])' --arg id "$id"
 }
 
 wg_public_from_private() {
@@ -697,22 +749,15 @@ remove_wg_peer_runtime() {
 }
 
 write_clients_file() {
-  local path ids id
+  local path
   path="$(clients_file)"
 
   if [ "$FREE_TURN_ENABLE_CLIENTS_FILE" = "1" ]; then
     FREE_TURN_CLIENTS_FILE="/app/clients.json"
-    ids=()
-    if [ -f "$path" ]; then
-      while IFS= read -r id; do
-        ids+=("$id")
-      done < <(read_client_ids "$path")
-    fi
-    ids+=("$FREE_TURN_CLIENT_ID")
-    write_client_ids "$path" "${ids[@]}"
+    upsert_client_record "$path" "$FREE_TURN_CLIENT_ID" "$FREE_TURN_CLIENT_NAME"
   else
     FREE_TURN_CLIENTS_FILE=""
-    write_client_ids "$path"
+    clear_clients_json "$path"
   fi
 }
 
@@ -1139,6 +1184,9 @@ print_summary() {
   echo "  Peer address: $host:$FREE_TURN_LISTEN_PORT"
   echo "  OBF profile: $FREE_TURN_OBF_PROFILE"
   echo "  OBF key: $FREE_TURN_OBF_KEY"
+  if [ -n "$FREE_TURN_CLIENT_NAME" ]; then
+    echo "  Client name: $FREE_TURN_CLIENT_NAME"
+  fi
   echo "  Client ID: $FREE_TURN_CLIENT_ID"
   echo "  Transport to VK TURN: TCP/TLS in client app unless you explicitly need UDP"
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
@@ -1185,6 +1233,11 @@ add_client_command() {
   if client_id_exists "$id" || [ -f "$(client_conf_file "$id")" ]; then
     die "Client already exists: $id"
   fi
+  if [ -n "$FREE_TURN_CLIENT_NAME" ]; then
+    valid_client_name "$FREE_TURN_CLIENT_NAME" || die "Invalid client display name: $FREE_TURN_CLIENT_NAME"
+    client_name_in_use "$(clients_file)" "$FREE_TURN_CLIENT_NAME" &&
+      die "Client display name is already in use: $FREE_TURN_CLIENT_NAME"
+  fi
 
   server_conf="$(server_wg_conf_file)"
   server_priv="$(read_conf_value "$server_conf" "PrivateKey" || true)"
@@ -1199,7 +1252,7 @@ add_client_command() {
   write_client_wg_conf "$id" "$client_priv" "$client_addr" "$client_conf"
   append_wg_peer "$id" "$client_pub" "$client_addr"
   apply_wg_peer_runtime "$client_pub" "$client_addr"
-  add_client_id_to_allowlist "$id"
+  add_client_id_to_allowlist "$id" "$FREE_TURN_CLIENT_NAME"
   restart_compose_if_available
 
   FREE_TURN_CLIENT_ID="$id"
@@ -1211,6 +1264,9 @@ add_client_command() {
   fi
 
   echo "Client added:"
+  if [ -n "$FREE_TURN_CLIENT_NAME" ]; then
+    echo "  Name: $FREE_TURN_CLIENT_NAME"
+  fi
   echo "  Client ID: $id"
   echo "  WireGuard address: $client_addr/32"
   echo "  WireGuard config: $client_conf"
@@ -1313,11 +1369,42 @@ rotate_obf_key_command() {
   fi
 }
 
-list_clients_command() {
-  local path
+name_client_command() {
+  local id="$1" name="$2" path
+  load_existing_stack_config
   path="$(clients_file)"
   [ -f "$path" ] || die "Clients file not found: $path"
-  read_client_ids "$path"
+  valid_client_id "$id" || die "Invalid Client ID: $id"
+  valid_client_name "$name" || die "Client name must be 1-64 letters, digits, spaces, dots, underscores or dashes."
+  client_id_exists "$id" || die "Client ID not found: $id"
+  upsert_client_record "$path" "$id" "$name"
+  echo "Client name updated:"
+  echo "  Name: $name"
+  echo "  Client ID: $id"
+  echo "Existing client links remain valid because the Client ID was not changed."
+}
+
+list_clients_command() {
+  local path count id name
+  path="$(clients_file)"
+  [ -f "$path" ] || die "Clients file not found: $path"
+  ensure_jq
+  ensure_clients_json "$path"
+  count="$(jq '(.clients // {}) | length' "$path")"
+  if [ "$count" -eq 0 ]; then
+    echo "No clients configured."
+    return 0
+  fi
+
+  printf '%-24s %s\n' "NAME" "CLIENT ID"
+  while IFS=$'\t' read -r id name; do
+    [ -n "$name" ] || name="(unnamed)"
+    printf '%-24s %s\n' "$name" "$id"
+  done < <(jq -r '
+    (.clients // {}) | to_entries |
+    sort_by([(.value.comment // "" | ascii_downcase), .key])[] |
+    [.key, (.value.comment // "")] | @tsv
+  ' "$path")
 }
 
 check_item() {
@@ -1481,6 +1568,9 @@ main() {
       ;;
     add-client)
       add_client_command "$ACTION_ARG"
+      ;;
+    name-client)
+      name_client_command "$ACTION_ARG" "$ACTION_ARG2"
       ;;
     remove-client)
       remove_client_command "$ACTION_ARG"

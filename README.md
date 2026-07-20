@@ -242,12 +242,15 @@ sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash>
 sudo bash free-turn-setup.sh --print-link https://vk.com/call/join/<hash> --client-id <client-id>
 sudo bash free-turn-setup.sh --print-qr https://vk.com/call/join/<hash> --client-id <client-id>
 sudo bash free-turn-setup.sh --list-clients
-sudo bash free-turn-setup.sh --add-client
+sudo bash free-turn-setup.sh --add-client --client-name iphone
+sudo bash free-turn-setup.sh --name-client <client-id> iphone
 sudo bash free-turn-setup.sh --remove-client <client-id>
 sudo bash free-turn-setup.sh --rotate-obf-key https://vk.com/call/join/<hash>
 ```
 
-`--add-client` создает полноценного отдельного клиента: новый `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовые ссылки для iOS и Android.
+`--add-client` создает полноценного отдельного клиента: новый случайный `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовые ссылки для iOS и Android. Параметр `--client-name` добавляет понятное отображаемое имя, например `iphone`, `windows` или `ipad-home`.
+
+Отображаемое имя хранится в штатном поле `comment` файла `clients.json` отдельно от технического `Client ID`. Поэтому существующему клиенту можно безопасно назначить или изменить имя командой `--name-client <client-id> <name>`: действующая ссылка, ключи и подключение останутся прежними. `--list-clients` показывает таблицу с именем и соответствующим Client ID; имена должны быть уникальными.
 
 При повторном запуске установщик загружает существующую конфигурацию и сохраняет все WireGuard peers, созданные через `--add-client`. Флаг `--rotate-keys` меняет серверный WireGuard-ключ, сохраняя клиентские ключи и peers, и обновляет публичный ключ сервера во всех сохранённых клиентских конфигах. После такой ротации конфиги или ссылки нужно заново импортировать на устройства: установленная ранее копия всё ещё содержит старый публичный ключ сервера.
 

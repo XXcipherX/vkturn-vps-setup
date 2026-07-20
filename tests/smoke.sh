@@ -236,6 +236,7 @@ check_free_turn_installer() {
   export FREE_TURN_OBF_TIMING=0
   export FREE_TURN_CLIENTS_FILE=/app/clients.json
   export FREE_TURN_CLIENT_ID=smoke-client
+  export FREE_TURN_CLIENT_NAME=
   export FREE_TURN_DEBUG=0
   export FREE_TURN_WG_SERVER_ADDRESS=10.77.0.1
   export FREE_TURN_WG_PORT=51820
@@ -254,6 +255,12 @@ check_free_turn_installer() {
     # shellcheck source=../free-turn-setup.sh
     source "$ROOT/free-turn-setup.sh"
     validate_config
+    if ! (parse_args --add-client --client-name iphone; [ "$ACTION" = add-client ] && [ "$FREE_TURN_CLIENT_NAME" = iphone ]); then
+      fail "Free Turn did not parse a named client creation"
+    fi
+    if ! (parse_args --name-client first-client "home iphone"; [ "$ACTION" = name-client ] && [ "$ACTION_ARG" = first-client ] && [ "$ACTION_ARG2" = "home iphone" ]); then
+      fail "Free Turn did not parse an existing client name update"
+    fi
     if (FREE_TURN_LISTEN_PORT=70000; validate_config >/dev/null 2>&1); then
       fail "Free Turn installer accepted an invalid listen port"
     fi
@@ -283,6 +290,22 @@ check_free_turn_installer() {
     assert_contains "$out/preserved-peers.conf" 'PublicKey = first-client'
     assert_contains "$out/preserved-peers.conf" 'PublicKey = second-client'
     assert_not_contains "$out/preserved-peers.conf" 'PrivateKey = server-key'
+
+    INSTALL_DIR="$out/client-state"
+    clear_clients_json
+    upsert_client_record "$(clients_file)" first-client iphone
+    upsert_client_record "$(clients_file)" second-client windows
+    upsert_client_record "$(clients_file)" first-client ""
+    [ "$(jq -r '.clients["first-client"].comment' "$(clients_file)")" = iphone ] ||
+      fail "Free Turn client display name was not preserved"
+    [ "$(read_client_ids "$(clients_file)" | wc -l)" -eq 2 ] ||
+      fail "Free Turn named client records are not readable"
+    if (upsert_client_record "$(clients_file)" third-client iphone >/dev/null 2>&1); then
+      fail "Free Turn accepted a duplicate client display name"
+    fi
+    remove_client_id_from_allowlist second-client
+    jq -e '.clients["first-client"].comment == "iphone" and (.clients | has("second-client") | not)' \
+      "$(clients_file)" >/dev/null || fail "Free Turn client metadata update lost another record"
   )
 
   envsubst < "$ROOT/templates_for_script/free-turn-compose" > "$out/docker-compose.yml"
@@ -309,6 +332,7 @@ check_free_turn_installer() {
   assert_contains "$ROOT/free-turn-setup.sh" 'FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"'
   assert_contains "$ROOT/free-turn-setup.sh" 'extract_wg_peers "$server_conf" "$peers_tmp"'
   assert_contains "$ROOT/free-turn-setup.sh" 'sync_client_server_public_key "$server_pub"'
+  assert_contains "$ROOT/free-turn-setup.sh" 'sudo bash free-turn-setup.sh --name-client <client-id> <name>'
   assert_not_contains "$ROOT/free-turn-setup.sh" 'health_check || true'
   assert_not_contains "$ROOT/free-turn-setup.sh" 'up -d --force-recreate >/dev/null 2>&1 || true'
   pass "Free Turn validation, peer preservation, firewall invariants, and Compose rendering"
@@ -328,6 +352,7 @@ check_repository_contracts() {
 
 require_command shellcheck
 require_command envsubst
+require_command jq
 require_command docker
 require_command git
 docker compose version >/dev/null 2>&1 || fail "docker compose plugin is missing"
