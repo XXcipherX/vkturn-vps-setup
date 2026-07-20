@@ -237,6 +237,7 @@ check_free_turn_installer() {
   export FREE_TURN_CLIENTS_FILE=/app/clients.json
   export FREE_TURN_CLIENT_ID=smoke-client
   export FREE_TURN_CLIENT_NAME=
+  export FREE_TURN_VK_LINK=https://vk.ru/call/join/smoke-hash
   export FREE_TURN_DEBUG=0
   export FREE_TURN_WG_SERVER_ADDRESS=10.77.0.1
   export FREE_TURN_WG_PORT=51820
@@ -255,12 +256,27 @@ check_free_turn_installer() {
     # shellcheck source=../free-turn-setup.sh
     source "$ROOT/free-turn-setup.sh"
     validate_config
-    if ! (parse_args --add-client --client-name iphone; [ "$ACTION" = add-client ] && [ "$FREE_TURN_CLIENT_NAME" = iphone ]); then
+    if ! (parse_args --add-client --client-name iphone --vk-link 'https://vk.ru/call/join/smoke-hash?from=test'; [ "$ACTION" = add-client ] && [ "$FREE_TURN_CLIENT_NAME" = iphone ] && [ "$FREE_TURN_VK_LINK_OVERRIDE" = 1 ]); then
       fail "Free Turn did not parse a named client creation"
     fi
     if ! (parse_args --name-client first-client "home iphone"; [ "$ACTION" = name-client ] && [ "$ACTION_ARG" = first-client ] && [ "$ACTION_ARG2" = "home iphone" ]); then
       fail "Free Turn did not parse an existing client name update"
     fi
+    [ "$(normalize_vk_link 'https://vk.com/call/join/smoke-hash?from=test')" = 'https://vk.ru/call/join/smoke-hash' ] ||
+      fail "Free Turn did not canonicalize the VK link"
+
+    INSTALL_DIR="$out/vk-state"
+    mkdir -p "$INSTALL_DIR"
+    printf '%s\n' 'FREE_TURN_VK_LINK=https://vk.com/call/join/saved-hash' > "$(env_file)"
+    FREE_TURN_VK_LINK=""
+    FREE_TURN_VK_LINK_OVERRIDE=0
+    load_existing_stack_config
+    [ "$FREE_TURN_VK_LINK" = 'https://vk.ru/call/join/saved-hash' ] ||
+      fail "Free Turn did not load the saved VK link"
+    FREE_TURN_VK_LINK='https://vk.com/call/join/new-hash?from=test'
+    FREE_TURN_VK_LINK_OVERRIDE=1
+    load_existing_stack_config
+    assert_contains "$(env_file)" 'FREE_TURN_VK_LINK=https://vk.ru/call/join/new-hash'
     if (FREE_TURN_LISTEN_PORT=70000; validate_config >/dev/null 2>&1); then
       fail "Free Turn installer accepted an invalid listen port"
     fi
@@ -323,6 +339,7 @@ check_free_turn_installer() {
   assert_not_contains "$out/wg.conf" 'FORWARD -i %i -j ACCEPT'
   assert_contains "$out/firewall.service" 'EnvironmentFile=/opt/free-turn-proxy/.env'
   assert_contains "$out/firewall.service" 'ExecStop=/usr/local/lib/free-turn-proxy/apply-firewall.sh remove'
+  assert_contains "$out/.env" 'FREE_TURN_VK_LINK=https://vk.ru/call/join/smoke-hash'
   assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" '! -i lo -p udp --dport "$FREE_TURN_WG_PORT" -j DROP'
   assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" '-i "$FREE_TURN_WG_IFACE" -j DROP'
   assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" 'apply_rules ip6tables "$ACTION"'

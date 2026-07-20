@@ -36,6 +36,7 @@ ACTION_ARG2=""
 ROTATE_WG_KEYS=0
 FREE_TURN_CLIENT_ID_OVERRIDE=0
 FREE_TURN_NUM_CONNECTIONS_OVERRIDE=0
+FREE_TURN_VK_LINK_OVERRIDE=0
 
 log() { printf '[free-turn-setup] %s\n' "$*"; }
 die() { printf '[free-turn-setup] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -60,6 +61,10 @@ valid_client_id() {
 valid_client_name() {
   [ -n "$1" ] && [ "${#1}" -le 64 ] &&
     printf '%s' "$1" | grep -Eq '^[[:alnum:]][-[:alnum:]_. ]*$'
+}
+
+valid_vk_hash() {
+  printf '%s' "$1" | grep -Eq '^[-A-Za-z0-9._~]{1,512}$'
 }
 
 valid_iface() {
@@ -126,6 +131,7 @@ parse_args() {
         shift
         if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
           FREE_TURN_VK_LINK="$1"
+          FREE_TURN_VK_LINK_OVERRIDE=1
           shift
         fi
         ;;
@@ -134,6 +140,7 @@ parse_args() {
         shift
         if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
           FREE_TURN_VK_LINK="$1"
+          FREE_TURN_VK_LINK_OVERRIDE=1
           shift
         fi
         ;;
@@ -183,12 +190,14 @@ parse_args() {
         shift
         if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
           FREE_TURN_VK_LINK="$1"
+          FREE_TURN_VK_LINK_OVERRIDE=1
           shift
         fi
         ;;
       --vk-link)
         require_arg "$1" "${2:-}"
         FREE_TURN_VK_LINK="$2"
+        FREE_TURN_VK_LINK_OVERRIDE=1
         shift 2
         ;;
       --connections)
@@ -794,6 +803,9 @@ ensure_client_store() {
 write_compose_stack() {
   mkdir -p "$INSTALL_DIR"
   write_clients_file
+  if [ -n "$FREE_TURN_VK_LINK" ]; then
+    FREE_TURN_VK_LINK="$(normalize_vk_link "$FREE_TURN_VK_LINK")"
+  fi
 
   export FREE_TURN_IMAGE
   envsubst '$FREE_TURN_IMAGE' \
@@ -804,8 +816,8 @@ write_compose_stack() {
   export FREE_TURN_OBF_PROFILE FREE_TURN_OBF_KEY FREE_TURN_OBF_TIMING
   export FREE_TURN_CLIENTS_FILE FREE_TURN_DEBUG
   export FREE_TURN_SETUP_WG FREE_TURN_WG_IFACE FREE_TURN_WG_PORT FREE_TURN_WG_CIDR FREE_TURN_WG_SERVER_ADDRESS
-  export FREE_TURN_NUM_CONNECTIONS FREE_TURN_PUBLIC_HOST FREE_TURN_CLIENT_ID FREE_TURN_NO_FIREWALL
-  envsubst '$FREE_TURN_CONNECT_ADDR $FREE_TURN_LISTEN_PORT $FREE_TURN_SETUP_WG $FREE_TURN_WG_IFACE $FREE_TURN_WG_PORT $FREE_TURN_WG_CIDR $FREE_TURN_WG_SERVER_ADDRESS $FREE_TURN_NUM_CONNECTIONS $FREE_TURN_PUBLIC_HOST $FREE_TURN_NO_FIREWALL $FREE_TURN_MODE $FREE_TURN_OBF_PROFILE $FREE_TURN_OBF_KEY $FREE_TURN_OBF_TIMING $FREE_TURN_CLIENTS_FILE $FREE_TURN_CLIENT_ID $FREE_TURN_DEBUG' \
+  export FREE_TURN_NUM_CONNECTIONS FREE_TURN_PUBLIC_HOST FREE_TURN_CLIENT_ID FREE_TURN_NO_FIREWALL FREE_TURN_VK_LINK
+  envsubst '$FREE_TURN_CONNECT_ADDR $FREE_TURN_LISTEN_PORT $FREE_TURN_SETUP_WG $FREE_TURN_WG_IFACE $FREE_TURN_WG_PORT $FREE_TURN_WG_CIDR $FREE_TURN_WG_SERVER_ADDRESS $FREE_TURN_NUM_CONNECTIONS $FREE_TURN_PUBLIC_HOST $FREE_TURN_NO_FIREWALL $FREE_TURN_VK_LINK $FREE_TURN_MODE $FREE_TURN_OBF_PROFILE $FREE_TURN_OBF_KEY $FREE_TURN_OBF_TIMING $FREE_TURN_CLIENTS_FILE $FREE_TURN_CLIENT_ID $FREE_TURN_DEBUG' \
     < "$TEMPLATE_DIR/free-turn-env" \
     > "$(env_file)"
   chmod 600 "$(env_file)"
@@ -822,6 +834,7 @@ persist_free_turn_runtime_config() {
   set_env_value FREE_TURN_WG_SERVER_ADDRESS "$FREE_TURN_WG_SERVER_ADDRESS" "$file"
   set_env_value FREE_TURN_NUM_CONNECTIONS "$FREE_TURN_NUM_CONNECTIONS" "$file"
   set_env_value FREE_TURN_NO_FIREWALL "$FREE_TURN_NO_FIREWALL" "$file"
+  set_env_value FREE_TURN_VK_LINK "$FREE_TURN_VK_LINK" "$file"
 }
 
 setup_wireguard_backend() {
@@ -973,16 +986,14 @@ strip_vk_hash() {
 }
 
 normalize_vk_link() {
-  local s hash
-  s="$1"
-  if [ -z "$s" ]; then
-    printf 'https://vk.com/call/join/VK_HASH'
+  local hash
+  if [ -z "$1" ]; then
+    printf 'https://vk.ru/call/join/VK_HASH'
     return
   fi
-  case "$s" in
-    http://*|https://*) printf '%s' "$s" ;;
-    *) hash="$(strip_vk_hash "$s")"; printf 'https://vk.com/call/join/%s' "$hash" ;;
-  esac
+  hash="$(strip_vk_hash "$1")"
+  valid_vk_hash "$hash" || die "VK call link/hash contains unsupported characters."
+  printf 'https://vk.ru/call/join/%s' "$hash"
 }
 
 json_escape() {
@@ -1050,6 +1061,15 @@ load_existing_stack_config() {
     if value="$(read_env_value FREE_TURN_NUM_CONNECTIONS)"; then FREE_TURN_NUM_CONNECTIONS="$value"; fi
   fi
   if value="$(read_env_value FREE_TURN_PUBLIC_HOST)"; then FREE_TURN_PUBLIC_HOST="$value"; fi
+  if [ "$FREE_TURN_VK_LINK_OVERRIDE" = "1" ]; then
+    FREE_TURN_VK_LINK="$(normalize_vk_link "$FREE_TURN_VK_LINK")"
+    set_env_value FREE_TURN_VK_LINK "$FREE_TURN_VK_LINK"
+  elif value="$(read_env_value FREE_TURN_VK_LINK)"; then
+    FREE_TURN_VK_LINK="$value"
+    if [ -n "$FREE_TURN_VK_LINK" ]; then
+      FREE_TURN_VK_LINK="$(normalize_vk_link "$FREE_TURN_VK_LINK")"
+    fi
+  fi
   if [ "$FREE_TURN_CLIENT_ID_OVERRIDE" != "1" ]; then
     if value="$(read_env_value FREE_TURN_CLIENT_ID)"; then FREE_TURN_CLIENT_ID="$value"; fi
   fi
