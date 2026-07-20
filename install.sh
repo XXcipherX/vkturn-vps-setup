@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.3.0"
 
 WDTT_SOURCE_REPO_DEFAULT="https://github.com/XXcipherX/proxy-turn-vk-android.git"
 WDTT_SOURCE_REF_DEFAULT="main-new"
-WDTT_GO_VERSION_DEFAULT="1.25.0"
+WDTT_GO_VERSION_DEFAULT="1.26.5"
 
 WDTT_INSTALL_ROOT="${WDTT_INSTALL_ROOT:-/opt/wdtt}"
 WDTT_SOURCE_DIR="${WDTT_SOURCE_DIR:-$WDTT_INSTALL_ROOT/source}"
@@ -82,7 +82,7 @@ Main options:
   --bot-token VALUE     Optional Telegram bot token for WDTT access manager.
   --source-repo URL     Source repo to build wdtt-server from.
   --source-ref REF      Branch, tag, or commit. Default: main-new.
-  --go-version VERSION  Go version used if system Go is too old. Default: 1.25.0.
+  --go-version VERSION  Go version used if system Go is too old. Default: 1.26.5.
   --purge               With uninstall: remove /etc/wdtt too.
 
 Environment variables mirror the option names, for example:
@@ -285,9 +285,8 @@ validate_safe_value() {
 
 validate_public_host() {
   [ -z "$PUBLIC_HOST" ] && return 0
-  if ! printf '%s' "$PUBLIC_HOST" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-    die "WDTT_PUBLIC_HOST must be an IPv4 address or domain without scheme, path or port."
-  fi
+  validate_public_host_value "$PUBLIC_HOST" || \
+    die "WDTT_PUBLIC_HOST must be a public IPv4 address or valid public DNS name without scheme, path or port."
 }
 
 validate_ipv4_address() {
@@ -303,6 +302,41 @@ validate_ipv4_address() {
     fi
     [ "$octet" -le 255 ] || return 1
   done
+}
+
+is_public_ipv4_address() {
+  local value="$1" octets=() first second
+  validate_ipv4_address "$value" || return 1
+  IFS='.' read -r -a octets <<< "$value"
+  first=$((10#${octets[0]}))
+  second=$((10#${octets[1]}))
+  [ "$first" -ne 0 ] && [ "$first" -ne 10 ] && [ "$first" -ne 127 ] && [ "$first" -lt 224 ] || return 1
+  { [ "$first" -ne 169 ] || [ "$second" -ne 254 ]; } || return 1
+  { [ "$first" -ne 172 ] || [ "$second" -lt 16 ] || [ "$second" -gt 31 ]; } || return 1
+  { [ "$first" -ne 192 ] || [ "$second" -ne 168 ]; } || return 1
+}
+
+validate_public_dns_name() {
+  local value="${1,,}" labels=() label
+  [ "${#value}" -le 253 ] || return 1
+  [ "$value" != "localhost" ] && [[ "$value" == *.* ]] || return 1
+  case "$value" in .*|*.) return 1 ;; esac
+  IFS='.' read -r -a labels <<< "$value"
+  [ "${#labels[@]}" -ge 2 ] || return 1
+  for label in "${labels[@]}"; do
+    [ -n "$label" ] && [ "${#label}" -le 63 ] || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+}
+
+validate_public_host_value() {
+  local value="$1"
+  [ -n "$value" ] || return 0
+  if [[ "$value" =~ ^[0-9.]+$ ]]; then
+    is_public_ipv4_address "$value"
+    return
+  fi
+  validate_public_dns_name "$value"
 }
 
 validate_dns_servers() {
@@ -552,6 +586,7 @@ WDTT_BOT_TOKEN=$BOT_TOKEN
 WDTT_PUBLIC_HOST=$PUBLIC_HOST
 WDTT_SOURCE_REPO=$SOURCE_REPO
 WDTT_SOURCE_REF=$SOURCE_REF
+WDTT_GO_VERSION=$GO_VERSION
 WDTT_IPT_COMMENT=WDTT_SETUP
 EOF
   )
@@ -676,17 +711,30 @@ EOF
 }
 
 start_services() {
+  local attempt=0 pid_before="" pid_after="" started_at
   command -v systemctl >/dev/null 2>&1 || die "systemctl not found. This installer requires systemd."
   systemctl daemon-reload
   systemctl enable --now wdtt-firewall.service >/dev/null
   systemctl enable wdtt.service >/dev/null
+  started_at="$(date +%s)"
   systemctl restart wdtt.service
-  sleep 3
-  if ! systemctl is-active --quiet wdtt.service; then
-    journalctl -u wdtt -n 60 --no-pager >&2 || true
-    die "wdtt.service did not become active."
-  fi
-  log "wdtt.service is active"
+  while [ "$attempt" -lt 30 ]; do
+    if systemctl is-active --quiet wdtt.service && \
+      journalctl -u wdtt.service --since "@$started_at" -o cat --no-pager 2>/dev/null | grep -Fq '[SERVER] Готов'; then
+      pid_before="$(systemctl show wdtt.service --property=MainPID --value)"
+      sleep 2
+      pid_after="$(systemctl show wdtt.service --property=MainPID --value)"
+      if [ -n "$pid_before" ] && [ "$pid_before" != "0" ] && [ "$pid_before" = "$pid_after" ] && \
+        systemctl is-active --quiet wdtt.service; then
+        log "wdtt.service reported readiness and remained active"
+        return 0
+      fi
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  journalctl -u wdtt.service -n 80 --no-pager >&2 || true
+  die "wdtt.service did not report stable readiness within 30 seconds."
 }
 
 strip_vk_hash() {
@@ -711,18 +759,22 @@ detect_public_host() {
   if command -v curl >/dev/null 2>&1; then
     local ip
     ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-    if [ -n "$ip" ]; then
+    if is_public_ipv4_address "$ip"; then
       printf '%s' "$ip"
       return 0
     fi
   fi
-  hostname -I 2>/dev/null | awk '{print $1}'
+  return 1
 }
 
 print_ios_link() {
   local host hash
-  host="$(detect_public_host)"
-  [ -n "$host" ] || host="YOUR_SERVER_IP"
+  host="$(detect_public_host || true)"
+  if [ -z "$host" ]; then
+    printf '\n'
+    log "Public host could not be detected; set WDTT_PUBLIC_HOST or --public-host before generating a wdtt:// link."
+    return 0
+  fi
   hash="$(strip_vk_hash "$VK_LINK")"
   [ -n "$hash" ] || hash="VK_HASH"
   printf '\n'

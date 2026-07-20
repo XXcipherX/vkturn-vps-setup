@@ -113,6 +113,8 @@ sudo bash vps-setup.sh
 При повторном запуске сохраненные пароль, порты, DNS, Telegram-параметры, image
 и данные для ссылки используются как значения по умолчанию. Новый
 пароль устанавливается только если его явно ввести; пустой ввод сохраняет текущий.
+Новый image скачивается до остановки действующего контейнера: ошибка registry или
+сети не прерывает уже работающий WDTT.
 
 Если нужен другой тег или свой registry, можно переопределить image:
 
@@ -132,9 +134,12 @@ sudo WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest bash vps-setup.sh
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml ps
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml logs -f
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml pull
-sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml restart
+sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml up -d
 sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
 ```
+
+После `pull` используй именно `up -d`: обычный `restart` перезапускает прежний
+контейнер и не переводит его на только что скачанный image.
 
 После установки файл `/opt/vkturn-vps-setup/.env` содержит пароль и создается с
 правами `600`. Не публикуй его и не добавляй в Git.
@@ -305,7 +310,8 @@ WG port: 56001
 8. Создает `/usr/local/lib/wdtt/apply-firewall.sh` для DTLS ingress, блокировки внешнего WG-порта и TCPMSS.
 9. Создает `wdtt-firewall.service`, чтобы эти правила применялись после перезагрузки.
 10. Перед обновлением сохраняет копию `passwords.json` в `/etc/wdtt/backups/`.
-11. Создает и запускает `wdtt.service`, затем проверяет, что сервис активен.
+11. Создает и запускает `wdtt.service`, ждёт `[SERVER] Готов` и проверяет, что PID
+    после готовности остаётся стабильным.
 
 Проверка:
 
@@ -378,8 +384,13 @@ sudo /tmp/vkturn-install.sh uninstall --purge
 --bot-token / WDTT_BOT_TOKEN     Telegram bot token, optional
 --source-repo / WDTT_SOURCE_REPO репозиторий для сборки wdtt-server, default XXcipherX/proxy-turn-vk-android
 --source-ref / WDTT_SOURCE_REF   branch, tag или commit, default main-new
---go-version / WDTT_GO_VERSION   Go version, default 1.25.0
+--go-version / WDTT_GO_VERSION   Go version, default 1.26.5
 ```
+
+`WDTT_PUBLIC_HOST` принимает только публичный IPv4 или корректное DNS-имя без
+схемы, пути и порта. Если адрес не задан и внешний IPv4 невозможно безопасно
+определить, установка сервера завершится, но заведомо нерабочая `wdtt://` ссылка
+с приватным адресом напечатана не будет.
 
 При повторном запуске параметры, переданные флагами или переменными окружения, имеют приоритет над сохраненными значениями из `/etc/wdtt/wdtt.env`.
 
@@ -490,7 +501,7 @@ Bootstrap timeout на iOS
 ```bash
 sudo /tmp/vkturn-install.sh install \
   --password "$WDTT_PASS" \
-  --source-ref "f10a6c8740dec0fd0ada8d37d9c33f7ec602ea16"
+  --source-ref "86bd8094eac148111c7915d01386bbcdf7d4270e"
 ```
 
 Закреплённый ref должен содержать актуальный контракт firewall, в котором server core владеет `WDTT_MANAGED` NAT/FORWARD/изоляцией. Более старые версии ядра с новым установщиком не поддерживаются.
@@ -518,7 +529,8 @@ Workflow `.github/workflows/smoke.yml` запускается при каждо�
 и ShellCheck всех shell-скриптов, YAML, генерацию конфигурации обоих установщиков,
 Docker Compose для WDTT и Free Turn, права secret-файлов, IPv4 DNS и фиксированную
 подсеть, резервное копирование БД, разделение владельцев firewall-правил и
-синхронизацию ключевых ссылок в README.
+синхронизацию ключевых ссылок в README. Для WDTT дополнительно проверяются строгий
+публичный host, безопасный порядок Docker-обновления и systemd readiness-контракт.
 
 Тот же набор smoke-тестов можно запустить локально на Linux, если установлены
 `shellcheck`, `envsubst` и Docker Compose:

@@ -38,6 +38,14 @@ assert_no_unresolved() {
   fi
 }
 
+assert_before() {
+  local file="$1" first="$2" second="$3" first_line second_line
+  first_line="$(grep -nF -- "$first" "$file" | head -n1 | cut -d: -f1)"
+  second_line="$(grep -nF -- "$second" "$file" | head -n1 | cut -d: -f1)"
+  [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ] || \
+    fail "$file does not place '$first' before '$second'"
+}
+
 check_shell_syntax() {
   local file interpreter
   while IFS= read -r -d '' file; do
@@ -94,6 +102,7 @@ check_systemd_installer() {
     assert_not_contains "$WDTT_FIREWALL_SCRIPT" 'MASQUERADE'
     assert_not_contains "$WDTT_RUN_SCRIPT" 'export PATH='
     assert_contains "$WDTT_RUN_SCRIPT" '-password="${WDTT_PASSWORD}"'
+    assert_contains "$WDTT_ENV_FILE" 'WDTT_GO_VERSION=1.26.5'
     [ "$(find "$WDTT_CONFIG_DIR/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "systemd installer did not back up passwords.json"
     [ "$(stat -c '%a' "$WDTT_CONFIG_DIR/backups")" = 700 ] || fail "systemd backup directory is not mode 700"
 
@@ -106,6 +115,12 @@ check_systemd_installer() {
     if (DNS_SERVERS=1.1.1.1,; validate_inputs >/dev/null 2>&1); then
       fail "systemd installer accepted an empty DNS entry"
     fi
+    if (PUBLIC_HOST=192.168.1.10; validate_inputs >/dev/null 2>&1); then
+      fail "systemd installer accepted a private public host"
+    fi
+    if (PUBLIC_HOST=bad_host.example; validate_inputs >/dev/null 2>&1); then
+      fail "systemd installer accepted a malformed public DNS name"
+    fi
     if (parse_args --no-firewall >/dev/null 2>&1); then
       fail "systemd installer accepted the removed no-firewall mode"
     fi
@@ -113,9 +128,12 @@ check_systemd_installer() {
 
   assert_contains "$ROOT/install.sh" 'https://github.com/XXcipherX/proxy-turn-vk-android.git'
   assert_contains "$ROOT/install.sh" 'WDTT_SOURCE_REF_DEFAULT="main-new"'
+  assert_contains "$ROOT/install.sh" 'WDTT_GO_VERSION_DEFAULT="1.26.5"'
   assert_contains "$ROOT/install.sh" 'app/src/main/assets/linux-server'
   assert_contains "$ROOT/install.sh" 'ExecStart=$WDTT_RUN_SCRIPT'
   assert_contains "$ROOT/install.sh" 'UMask=0077'
+  assert_contains "$ROOT/install.sh" "grep -Fq '[SERVER] Готов'"
+  assert_contains "$ROOT/install.sh" 'property=MainPID'
   assert_contains "$ROOT/examples/wdtt.env.example" 'WDTT_SOURCE_REF=main-new'
   pass "systemd installer validation and generated helpers"
 }
@@ -152,6 +170,12 @@ check_docker_installer() {
     if (WDTT_DNS=1.1.1.1,; validate_config >/dev/null 2>&1); then
       fail "Docker installer accepted an empty DNS entry"
     fi
+    if (WDTT_PUBLIC_HOST=10.0.0.1; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a private public host"
+    fi
+    if (WDTT_PUBLIC_HOST=bad_host.example; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a malformed public DNS name"
+    fi
 
     INSTALL_DIR="$out"
     printf '{"passwords":{},"devices":{}}\n' > "$INSTALL_DIR/data/passwords.json"
@@ -187,6 +211,8 @@ check_docker_installer() {
   assert_contains "$ROOT/vps-setup.sh" "grep -F '[SERVER] Готов'"
   assert_contains "$ROOT/vps-setup.sh" 'load_saved_config'
   assert_contains "$ROOT/vps-setup.sh" 'chmod 600 "$ENV_FILE"'
+  assert_before "$ROOT/vps-setup.sh" 'docker pull "$WDTT_DOCKER_IMAGE"' 'docker compose -f "$COMPOSE_FILE" down'
+  assert_not_contains "$ROOT/vps-setup.sh" 'hostname -I'
   [ "$(find "$out/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "Docker installer did not back up passwords.json"
   [ "$(stat -c '%a' "$out/backups")" = 700 ] || fail "Docker backup directory is not mode 700"
   pass "Docker installer validation, rendering, Compose config, and firewall invariants"

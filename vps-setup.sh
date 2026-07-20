@@ -119,6 +119,41 @@ validate_ipv4_address() {
   done
 }
 
+is_public_ipv4_address() {
+  local value="$1" octets=() first second
+  validate_ipv4_address "$value" || return 1
+  IFS='.' read -r -a octets <<< "$value"
+  first=$((10#${octets[0]}))
+  second=$((10#${octets[1]}))
+  [ "$first" -ne 0 ] && [ "$first" -ne 10 ] && [ "$first" -ne 127 ] && [ "$first" -lt 224 ] || return 1
+  { [ "$first" -ne 169 ] || [ "$second" -ne 254 ]; } || return 1
+  { [ "$first" -ne 172 ] || [ "$second" -lt 16 ] || [ "$second" -gt 31 ]; } || return 1
+  { [ "$first" -ne 192 ] || [ "$second" -ne 168 ]; } || return 1
+}
+
+validate_public_dns_name() {
+  local value="${1,,}" labels=() label
+  [ "${#value}" -le 253 ] || return 1
+  [ "$value" != "localhost" ] && [[ "$value" == *.* ]] || return 1
+  case "$value" in .*|*.) return 1 ;; esac
+  IFS='.' read -r -a labels <<< "$value"
+  [ "${#labels[@]}" -ge 2 ] || return 1
+  for label in "${labels[@]}"; do
+    [ -n "$label" ] && [ "${#label}" -le 63 ] || return 1
+    [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || return 1
+  done
+}
+
+validate_public_host_value() {
+  local value="$1"
+  [ -n "$value" ] || return 0
+  if [[ "$value" =~ ^[0-9.]+$ ]]; then
+    is_public_ipv4_address "$value"
+    return
+  fi
+  validate_public_dns_name "$value"
+}
+
 validate_dns_servers() {
   local servers="$1" values=() server
   case "$servers" in
@@ -175,8 +210,8 @@ validate_config() {
   validate_dns_servers "$WDTT_DNS"
   validate_ipv4_cidr "$WDTT_SUBNET"
   [ "$WDTT_SUBNET" = "10.66.66.0/24" ] || die "WDTT_SUBNET is fixed by the current server core at 10.66.66.0/24."
-  printf '%s\n' "$WDTT_PUBLIC_HOST" | grep -Eq '^[A-Za-z0-9._-]*$' || \
-    die "WDTT_PUBLIC_HOST must be an IP address or domain without scheme, path, or port."
+  validate_public_host_value "$WDTT_PUBLIC_HOST" || \
+    die "WDTT_PUBLIC_HOST must be a public IPv4 address or valid public DNS name without scheme, path, or port."
   printf '%s\n' "$WDTT_VK_HASH" | grep -Eq '^[A-Za-z0-9._-]+$' || die "VK call hash contains unsupported characters."
   [ -z "$WDTT_ADMIN_ID" ] || printf '%s\n' "$WDTT_ADMIN_ID" | grep -Eq '^[0-9]+$' || die "WDTT_ADMIN_ID must be numeric."
   printf '%s\n' "$WDTT_BOT_TOKEN" | grep -Eq '^[A-Za-z0-9._:@-]*$' || die "WDTT_BOT_TOKEN contains unsupported characters."
@@ -252,6 +287,20 @@ backup_database() {
   cp -p -- "$source" "$backup"
   chmod 600 "$backup"
   echo "Backed up WDTT database to $backup"
+}
+
+detect_public_host() {
+  local ip=""
+  if [ -n "$WDTT_PUBLIC_HOST" ]; then
+    printf '%s' "$WDTT_PUBLIC_HOST"
+    return 0
+  fi
+  ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if is_public_ipv4_address "$ip"; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
 }
 
 wait_for_ready() {
@@ -330,6 +379,9 @@ main() {
   validate_config
   backup_database
 
+  echo "Pulling WDTT image before stopping the active installation..."
+  docker pull "$WDTT_DOCKER_IMAGE"
+
   if [ -f "$COMPOSE_FILE" ]; then
     docker compose -f "$COMPOSE_FILE" down
   fi
@@ -353,18 +405,21 @@ main() {
   chmod 600 "$ENV_FILE"
 
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
-  docker compose -f "$COMPOSE_FILE" pull
   docker compose -f "$COMPOSE_FILE" up -d
   wait_for_ready
 
   local host hash
-  host="${WDTT_PUBLIC_HOST:-$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')}"
-  host="${host:-YOUR_SERVER_IP}"
+  host="$(detect_public_host || true)"
   hash="$WDTT_VK_HASH"
 
   echo
-  echo "wdtt://$host:$WDTT_DTLS_PORT:$WDTT_WG_PORT:9000:$WDTT_PASSWORD:$hash"
-  echo
+  if [ -n "$host" ]; then
+    echo "wdtt://$host:$WDTT_DTLS_PORT:$WDTT_WG_PORT:9000:$WDTT_PASSWORD:$hash"
+    echo
+  else
+    echo "Public host could not be detected; set WDTT_PUBLIC_HOST and rerun the installer before generating a wdtt:// link."
+    echo
+  fi
   echo "Compose file: $COMPOSE_FILE"
   echo "Logs: docker compose -f $COMPOSE_FILE logs -f"
 }
