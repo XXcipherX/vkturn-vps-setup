@@ -227,6 +227,7 @@ check_free_turn_installer() {
   export FREE_TURN_LISTEN_PORT=56000
   export FREE_TURN_SETUP_WG=1
   export FREE_TURN_WG_IFACE=wgfreeturn
+  export FREE_TURN_NO_FIREWALL=0
   export FREE_TURN_NUM_CONNECTIONS=20
   export FREE_TURN_PUBLIC_HOST=example.com
   export FREE_TURN_MODE=udp
@@ -256,6 +257,32 @@ check_free_turn_installer() {
     if (FREE_TURN_LISTEN_PORT=70000; validate_config >/dev/null 2>&1); then
       fail "Free Turn installer accepted an invalid listen port"
     fi
+    if (FREE_TURN_WG_PORT=56000; FREE_TURN_CONNECT_ADDR=127.0.0.1:56000; validate_config >/dev/null 2>&1); then
+      fail "Free Turn installer accepted colliding public and backend ports"
+    fi
+    if (FREE_TURN_WG_IFACE='bad iface'; validate_config >/dev/null 2>&1); then
+      fail "Free Turn installer accepted an invalid WireGuard interface"
+    fi
+    if (FREE_TURN_WG_CIDR=10.77.0.0/16; validate_config >/dev/null 2>&1); then
+      fail "Free Turn installer accepted an unsupported WireGuard subnet prefix"
+    fi
+    if (FREE_TURN_NO_FIREWALL=1; validate_config >/dev/null 2>&1); then
+      fail "Free Turn installer allowed the managed WireGuard backend without host firewall protection"
+    fi
+
+    printf '%s\n' \
+      '[Interface]' \
+      'PrivateKey = server-key' \
+      '[Peer]' \
+      'PublicKey = first-client' \
+      'AllowedIPs = 10.77.0.2/32' \
+      '[Peer]' \
+      'PublicKey = second-client' \
+      'AllowedIPs = 10.77.0.3/32' > "$out/existing-wg.conf"
+    extract_wg_peers "$out/existing-wg.conf" "$out/preserved-peers.conf"
+    assert_contains "$out/preserved-peers.conf" 'PublicKey = first-client'
+    assert_contains "$out/preserved-peers.conf" 'PublicKey = second-client'
+    assert_not_contains "$out/preserved-peers.conf" 'PrivateKey = server-key'
   )
 
   envsubst < "$ROOT/templates_for_script/free-turn-compose" > "$out/docker-compose.yml"
@@ -268,9 +295,23 @@ check_free_turn_installer() {
   docker compose --env-file "$out/.env" -f "$out/docker-compose.yml" config --quiet
   assert_no_unresolved '\$FREE_TURN_[A-Z0-9_]+' \
     "$out/.env" "$out/docker-compose.yml" "$out/wg.conf" "$out/client.conf" "$out/firewall.service"
-  assert_contains "$out/wg.conf" 'PostDown = iptables'
+  assert_contains "$out/wg.conf" 'apply-wg-firewall.sh apply'
+  assert_contains "$out/wg.conf" 'apply-wg-firewall.sh remove'
+  assert_not_contains "$out/wg.conf" 'FORWARD -i %i -j ACCEPT'
   assert_contains "$out/firewall.service" 'EnvironmentFile=/opt/free-turn-proxy/.env'
-  pass "Free Turn templates render and Compose config validates"
+  assert_contains "$out/firewall.service" 'ExecStop=/usr/local/lib/free-turn-proxy/apply-firewall.sh remove'
+  assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" '! -i lo -p udp --dport "$FREE_TURN_WG_PORT" -j DROP'
+  assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" '-i "$FREE_TURN_WG_IFACE" -j DROP'
+  assert_contains "$ROOT/templates_for_script/free-turn-firewall.sh" 'apply_rules ip6tables "$ACTION"'
+  assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" '-i "$IFACE" -o "$IFACE" -m comment --comment "$COMMENT" -j DROP'
+  assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" '-i "$IFACE" -s "$CIDR" -o "$WAN"'
+  assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" 'COMMENT=FREE_TURN_WG'
+  assert_contains "$ROOT/free-turn-setup.sh" 'FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"'
+  assert_contains "$ROOT/free-turn-setup.sh" 'extract_wg_peers "$server_conf" "$peers_tmp"'
+  assert_contains "$ROOT/free-turn-setup.sh" 'sync_client_server_public_key "$server_pub"'
+  assert_not_contains "$ROOT/free-turn-setup.sh" 'health_check || true'
+  assert_not_contains "$ROOT/free-turn-setup.sh" 'up -d --force-recreate >/dev/null 2>&1 || true'
+  pass "Free Turn validation, peer preservation, firewall invariants, and Compose rendering"
 }
 
 check_repository_contracts() {

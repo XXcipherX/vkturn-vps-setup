@@ -25,7 +25,7 @@ FREE_TURN_WG_CLIENT_ADDRESS="${FREE_TURN_WG_CLIENT_ADDRESS:-10.13.13.2}"
 FREE_TURN_WG_DNS="${FREE_TURN_WG_DNS:-1.1.1.1}"
 FREE_TURN_WG_CLIENT_ENDPOINT="${FREE_TURN_WG_CLIENT_ENDPOINT:-127.0.0.1:9000}"
 FREE_TURN_VK_LINK="${FREE_TURN_VK_LINK:-}"
-FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-30}"
+FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"
 FREE_TURN_ENABLE_CLIENTS_FILE="${FREE_TURN_ENABLE_CLIENTS_FILE:-1}"
 FREE_TURN_NO_FIREWALL="${FREE_TURN_NO_FIREWALL:-0}"
 FREE_TURN_PUBLIC_HOST="${FREE_TURN_PUBLIC_HOST:-}"
@@ -56,6 +56,32 @@ valid_client_id() {
   printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._:-]{1,255}$'
 }
 
+valid_iface() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_.-]{1,15}$'
+}
+
+valid_ipv4() {
+  local a b c d octet
+  IFS=. read -r a b c d <<EOF
+$1
+EOF
+  [ -n "${a:-}" ] && [ -n "${b:-}" ] && [ -n "${c:-}" ] && [ -n "${d:-}" ] || return 1
+  for octet in "$a" "$b" "$c" "$d"; do
+    case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$octet" -le 255 ] || return 1
+  done
+}
+
+valid_ipv4_cidr() {
+  local address prefix
+  address="${1%/*}"
+  prefix="${1##*/}"
+  [ "$address" != "$1" ] || return 1
+  valid_ipv4 "$address" || return 1
+  case "$prefix" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$prefix" -eq 24 ]
+}
+
 usage() {
   cat <<EOF
 Usage:
@@ -75,7 +101,7 @@ Options:
   --vk-link <value>       VK call link/hash for the generated iOS import link.
   --client-id <value>     Client ID for generated import links.
   --connections <1-50>    iOS connection count for the generated import link.
-  --rotate-keys           Regenerate WireGuard keys during install.
+  --rotate-keys           Rotate the WireGuard server key while preserving clients.
   -h, --help              Show this help.
 EOF
 }
@@ -251,7 +277,7 @@ prompt_config() {
   ask FREE_TURN_NUM_CONNECTIONS "iOS connections count" "$FREE_TURN_NUM_CONNECTIONS"
   ask_yes_no FREE_TURN_ENABLE_CLIENTS_FILE "Enable server allowlist for this Client ID?" "$FREE_TURN_ENABLE_CLIENTS_FILE"
   ask FREE_TURN_PUBLIC_HOST "Public IP/domain for printed iOS values, empty = auto" "$FREE_TURN_PUBLIC_HOST"
-  ask_yes_no FREE_TURN_NO_FIREWALL "Skip host firewall rule for public UDP port?" "$FREE_TURN_NO_FIREWALL"
+  ask_yes_no FREE_TURN_NO_FIREWALL "Disable the managed host firewall (external backend only)?" "$FREE_TURN_NO_FIREWALL"
 }
 
 validate_config() {
@@ -259,15 +285,27 @@ validate_config() {
   FREE_TURN_OBF_PROFILE="$(printf '%s' "$FREE_TURN_OBF_PROFILE" | tr '[:upper:]' '[:lower:]')"
   valid_port "$FREE_TURN_LISTEN_PORT" || die "FREE_TURN_LISTEN_PORT must be 1-65535."
   case "$FREE_TURN_MODE" in udp|tcp) ;; *) die "FREE_TURN_MODE must be udp or tcp." ;; esac
+  case "$FREE_TURN_SETUP_WG" in 0|1) ;; *) die "FREE_TURN_SETUP_WG must be 0 or 1." ;; esac
+  case "$FREE_TURN_ENABLE_CLIENTS_FILE" in 0|1) ;; *) die "FREE_TURN_ENABLE_CLIENTS_FILE must be 0 or 1." ;; esac
+  case "$FREE_TURN_NO_FIREWALL" in 0|1) ;; *) die "FREE_TURN_NO_FIREWALL must be 0 or 1." ;; esac
   valid_endpoint "$FREE_TURN_CONNECT_ADDR" || die "FREE_TURN_CONNECT_ADDR must be host:port."
   case "$FREE_TURN_OBF_PROFILE" in none|rtpopus|rtpopus2|rtpopus3) ;; *) die "Unsupported FREE_TURN_OBF_PROFILE: $FREE_TURN_OBF_PROFILE" ;; esac
   if [ "$FREE_TURN_OBF_PROFILE" != "none" ]; then
     valid_hex64 "$FREE_TURN_OBF_KEY" || die "FREE_TURN_OBF_KEY must be 64 hex chars."
   fi
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
+    [ "$FREE_TURN_NO_FIREWALL" = "0" ] || die "The managed WireGuard backend requires the host firewall."
+    [ "$FREE_TURN_MODE" = "udp" ] || die "The local WireGuard backend requires FREE_TURN_MODE=udp."
     valid_port "$FREE_TURN_WG_PORT" || die "FREE_TURN_WG_PORT must be 1-65535."
+    [ "$FREE_TURN_LISTEN_PORT" != "$FREE_TURN_WG_PORT" ] || die "Public and backend UDP ports must be different."
+    [ "$FREE_TURN_CONNECT_ADDR" = "127.0.0.1:$FREE_TURN_WG_PORT" ] || die "The managed WireGuard backend must use 127.0.0.1:$FREE_TURN_WG_PORT."
+    valid_iface "$FREE_TURN_WG_IFACE" || die "FREE_TURN_WG_IFACE is invalid."
+    valid_ipv4_cidr "$FREE_TURN_WG_CIDR" || die "FREE_TURN_WG_CIDR must be a valid IPv4 /24 CIDR."
+    valid_ipv4 "$FREE_TURN_WG_SERVER_ADDRESS" || die "FREE_TURN_WG_SERVER_ADDRESS must be IPv4."
+    valid_ipv4 "$FREE_TURN_WG_CLIENT_ADDRESS" || die "FREE_TURN_WG_CLIENT_ADDRESS must be IPv4."
     [ -f "$TEMPLATE_DIR/free-turn-wg.conf" ] || die "Missing required template: free-turn-wg.conf"
     [ -f "$TEMPLATE_DIR/free-turn-client-wg.conf" ] || die "Missing required template: free-turn-client-wg.conf"
+    [ -f "$TEMPLATE_DIR/free-turn-wg-firewall.sh" ] || die "Missing required template: free-turn-wg-firewall.sh"
   fi
   case "$FREE_TURN_NUM_CONNECTIONS" in ''|*[!0-9]*) die "FREE_TURN_NUM_CONNECTIONS must be numeric." ;; esac
   [ "$FREE_TURN_NUM_CONNECTIONS" -ge 1 ] && [ "$FREE_TURN_NUM_CONNECTIONS" -le 50 ] || die "FREE_TURN_NUM_CONNECTIONS must be 1-50."
@@ -323,6 +361,92 @@ client_conf_file() {
 
 server_wg_conf_file() {
   printf '%s/%s.conf' "$WG_DIR" "$FREE_TURN_WG_IFACE"
+}
+
+extract_wg_peers() {
+  local source="$1" destination="$2"
+  : > "$destination"
+  [ -f "$source" ] || return 0
+  awk '
+    /^\[Peer\][[:space:]]*$/ { copy=1 }
+    copy { print }
+  ' "$source" > "$destination"
+}
+
+rewrite_client_server_public_key() {
+  local file="$1" public_key="$2" tmp
+  [ -f "$file" ] || return 0
+  tmp="$file.tmp.$$"
+  if ! awk -v public_key="$public_key" '
+    /^\[Peer\][[:space:]]*$/ { in_peer=1 }
+    in_peer && /^[[:space:]]*PublicKey[[:space:]]*=/ {
+      print "PublicKey = " public_key
+      replaced=1
+      next
+    }
+    { print }
+    END { if (!replaced) exit 1 }
+  ' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    die "Could not update the WireGuard server public key in $file."
+  fi
+  mv "$tmp" "$file"
+  chmod 600 "$file"
+}
+
+sync_client_server_public_key() {
+  local public_key="$1" file
+  rewrite_client_server_public_key "$INSTALL_DIR/wireguard-client.conf" "$public_key"
+  if [ -d "$(clients_dir)" ]; then
+    while IFS= read -r -d '' file; do
+      rewrite_client_server_public_key "$file" "$public_key"
+    done < <(find "$(clients_dir)" -maxdepth 1 -type f -name '*.conf' -print0)
+  fi
+}
+
+install_wg_firewall_helper() {
+  [ -f "$TEMPLATE_DIR/free-turn-wg-firewall.sh" ] || die "Missing required template: free-turn-wg-firewall.sh"
+  mkdir -p /usr/local/lib/free-turn-proxy
+  cp "$TEMPLATE_DIR/free-turn-wg-firewall.sh" /usr/local/lib/free-turn-proxy/apply-wg-firewall.sh
+  chmod 0755 /usr/local/lib/free-turn-proxy/apply-wg-firewall.sh
+}
+
+cleanup_legacy_wg_rules() {
+  local iface="$1" cidr="$2" wan="$3"
+  while iptables -w -C FORWARD -i "$iface" -j ACCEPT 2>/dev/null; do
+    iptables -w -D FORWARD -i "$iface" -j ACCEPT
+  done
+  while iptables -w -C FORWARD -o "$iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+    iptables -w -D FORWARD -o "$iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  done
+  while iptables -w -t nat -C POSTROUTING -s "$cidr" -o "$wan" -j MASQUERADE 2>/dev/null; do
+    iptables -w -t nat -D POSTROUTING -s "$cidr" -o "$wan" -j MASQUERADE
+  done
+}
+
+cleanup_free_turn_input_rules() {
+  local firewall rule
+  command -v iptables >/dev/null 2>&1 || return 0
+
+  for firewall in iptables ip6tables; do
+    command -v "$firewall" >/dev/null 2>&1 || continue
+    while "$firewall" -w -C INPUT -m comment --comment FREE_TURN_PROXY -j FREE_TURN_INPUT 2>/dev/null; do
+      "$firewall" -w -D INPUT -m comment --comment FREE_TURN_PROXY -j FREE_TURN_INPUT || true
+    done
+    if "$firewall" -w -nL FREE_TURN_INPUT >/dev/null 2>&1; then
+      "$firewall" -w -F FREE_TURN_INPUT || true
+      "$firewall" -w -X FREE_TURN_INPUT || true
+    fi
+  done
+
+  # Migrate rules created by older releases before the dedicated chain existed.
+  while IFS= read -r rule; do
+    local -a args=()
+    read -r -a args <<< "$rule"
+    [ "${#args[@]}" -gt 0 ] || continue
+    args[0]="-D"
+    iptables -w "${args[@]}" || true
+  done < <(iptables -w -S INPUT 2>/dev/null | grep -F -- '--comment FREE_TURN_PROXY' || true)
 }
 
 read_env_value() {
@@ -412,8 +536,9 @@ restart_compose_if_available() {
   local compose
   compose="$(compose_file)"
   [ -f "$compose" ] || return 0
-  command -v docker >/dev/null 2>&1 || return 0
-  docker compose -f "$compose" up -d --force-recreate >/dev/null 2>&1 || true
+  command -v docker >/dev/null 2>&1 || die "Docker is required to apply the server configuration."
+  docker compose -f "$compose" up -d --force-recreate
+  health_check
 }
 
 client_id_exists() {
@@ -559,16 +684,16 @@ remove_wg_peer_by_public_key() {
 
 apply_wg_peer_runtime() {
   local public_key="$1" address="$2"
-  command -v wg >/dev/null 2>&1 || return 0
-  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || return 0
-  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" allowed-ips "$address/32" || true
+  command -v wg >/dev/null 2>&1 || die "wireguard-tools is required."
+  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || die "WireGuard interface $FREE_TURN_WG_IFACE is not active."
+  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" allowed-ips "$address/32"
 }
 
 remove_wg_peer_runtime() {
   local public_key="$1"
-  command -v wg >/dev/null 2>&1 || return 0
-  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || return 0
-  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" remove || true
+  command -v wg >/dev/null 2>&1 || die "wireguard-tools is required."
+  wg show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || die "WireGuard interface $FREE_TURN_WG_IFACE is not active."
+  wg set "$FREE_TURN_WG_IFACE" peer "$public_key" remove
 }
 
 write_clients_file() {
@@ -633,49 +758,94 @@ write_compose_stack() {
   export FREE_TURN_CONNECT_ADDR FREE_TURN_LISTEN_PORT FREE_TURN_MODE
   export FREE_TURN_OBF_PROFILE FREE_TURN_OBF_KEY FREE_TURN_OBF_TIMING
   export FREE_TURN_CLIENTS_FILE FREE_TURN_DEBUG
-  export FREE_TURN_SETUP_WG FREE_TURN_WG_IFACE FREE_TURN_NUM_CONNECTIONS FREE_TURN_PUBLIC_HOST FREE_TURN_CLIENT_ID
-  envsubst '$FREE_TURN_CONNECT_ADDR $FREE_TURN_LISTEN_PORT $FREE_TURN_SETUP_WG $FREE_TURN_WG_IFACE $FREE_TURN_NUM_CONNECTIONS $FREE_TURN_PUBLIC_HOST $FREE_TURN_MODE $FREE_TURN_OBF_PROFILE $FREE_TURN_OBF_KEY $FREE_TURN_OBF_TIMING $FREE_TURN_CLIENTS_FILE $FREE_TURN_CLIENT_ID $FREE_TURN_DEBUG' \
+  export FREE_TURN_SETUP_WG FREE_TURN_WG_IFACE FREE_TURN_WG_PORT FREE_TURN_WG_CIDR FREE_TURN_WG_SERVER_ADDRESS
+  export FREE_TURN_NUM_CONNECTIONS FREE_TURN_PUBLIC_HOST FREE_TURN_CLIENT_ID FREE_TURN_NO_FIREWALL
+  envsubst '$FREE_TURN_CONNECT_ADDR $FREE_TURN_LISTEN_PORT $FREE_TURN_SETUP_WG $FREE_TURN_WG_IFACE $FREE_TURN_WG_PORT $FREE_TURN_WG_CIDR $FREE_TURN_WG_SERVER_ADDRESS $FREE_TURN_NUM_CONNECTIONS $FREE_TURN_PUBLIC_HOST $FREE_TURN_NO_FIREWALL $FREE_TURN_MODE $FREE_TURN_OBF_PROFILE $FREE_TURN_OBF_KEY $FREE_TURN_OBF_TIMING $FREE_TURN_CLIENTS_FILE $FREE_TURN_CLIENT_ID $FREE_TURN_DEBUG' \
     < "$TEMPLATE_DIR/free-turn-env" \
     > "$(env_file)"
   chmod 600 "$(env_file)"
 }
 
+persist_free_turn_runtime_config() {
+  local file
+  file="$(env_file)"
+  [ -f "$file" ] || die "Env file not found: $file"
+  set_env_value FREE_TURN_SETUP_WG "$FREE_TURN_SETUP_WG" "$file"
+  set_env_value FREE_TURN_WG_IFACE "$FREE_TURN_WG_IFACE" "$file"
+  set_env_value FREE_TURN_WG_PORT "$FREE_TURN_WG_PORT" "$file"
+  set_env_value FREE_TURN_WG_CIDR "$FREE_TURN_WG_CIDR" "$file"
+  set_env_value FREE_TURN_WG_SERVER_ADDRESS "$FREE_TURN_WG_SERVER_ADDRESS" "$file"
+  set_env_value FREE_TURN_NUM_CONNECTIONS "$FREE_TURN_NUM_CONNECTIONS" "$file"
+  set_env_value FREE_TURN_NO_FIREWALL "$FREE_TURN_NO_FIREWALL" "$file"
+}
+
 setup_wireguard_backend() {
   [ "$FREE_TURN_SETUP_WG" = "1" ] || return 0
 
-  local server_conf client_conf server_priv server_pub client_priv client_pub wan
+  local server_conf client_conf client_source server_priv server_pub client_priv client_pub wan
+  local peers_tmp stored_client existing_address legacy_wg_rules=0
   mkdir -p "$WG_DIR" "$INSTALL_DIR"
   chmod 700 "$WG_DIR"
 
   server_conf="$WG_DIR/$FREE_TURN_WG_IFACE.conf"
   client_conf="$INSTALL_DIR/wireguard-client.conf"
-  if [ "$ROTATE_WG_KEYS" != "1" ] && [ -f "$server_conf" ] && [ -f "$client_conf" ]; then
+  if [ -f "$server_conf" ] && grep -Fq 'FORWARD -i %i -j ACCEPT' "$server_conf"; then
+    legacy_wg_rules=1
+  fi
+  peers_tmp="$(mktemp "$INSTALL_DIR/.wg-peers.XXXXXX")"
+  extract_wg_peers "$server_conf" "$peers_tmp"
+
+  server_priv=""
+  if [ -f "$server_conf" ]; then
     server_priv="$(read_conf_value "$server_conf" "PrivateKey" || true)"
-    client_priv="$(read_conf_value "$client_conf" "PrivateKey" || true)"
-    if [ -n "$server_priv" ] && [ -n "$client_priv" ]; then
-      log "Reusing existing WireGuard keys. Use --rotate-keys to generate new ones."
-    else
-      server_priv=""
-      client_priv=""
-    fi
-  else
+  fi
+  if [ "$ROTATE_WG_KEYS" = "1" ]; then
     server_priv=""
-    client_priv=""
   fi
 
-  if [ -z "$server_priv" ] || [ -z "$client_priv" ]; then
-    log "Generating new WireGuard keys..."
+  client_source="$client_conf"
+  if [ ! -f "$client_source" ]; then
+    stored_client="$(client_conf_file "$FREE_TURN_CLIENT_ID")"
+    if [ -f "$stored_client" ]; then
+      client_source="$stored_client"
+    elif [ -d "$(clients_dir)" ]; then
+      stored_client="$(find "$(clients_dir)" -maxdepth 1 -type f -name '*.conf' -print -quit)"
+      [ -z "$stored_client" ] || client_source="$stored_client"
+    fi
+  fi
+
+  client_priv="$(read_conf_value "$client_source" "PrivateKey" || true)"
+  existing_address="$(read_conf_value "$client_source" "Address" || true)"
+  if [ -n "$existing_address" ]; then
+    FREE_TURN_WG_CLIENT_ADDRESS="${existing_address%%/*}"
+  fi
+
+  if [ -z "$server_priv" ]; then
+    log "Generating a new WireGuard server key..."
     server_priv="$(wg genkey)"
+  fi
+  if [ -z "$client_priv" ]; then
+    log "Generating the initial WireGuard client key..."
     client_priv="$(wg genkey)"
+  elif [ "$ROTATE_WG_KEYS" = "1" ]; then
+    log "Preserving WireGuard client keys and peers while rotating the server key."
+  else
+    log "Reusing existing WireGuard keys and peers."
   fi
 
   server_pub="$(printf '%s' "$server_priv" | wg pubkey)"
   client_pub="$(printf '%s' "$client_priv" | wg pubkey)"
   wan="$(detect_wan_iface)"
   [ -n "$wan" ] || die "Could not detect default WAN interface."
+  valid_iface "$wan" || die "Detected WAN interface is invalid: $wan"
+
+  install_wg_firewall_helper
 
   systemctl stop "wg-quick@$FREE_TURN_WG_IFACE" >/dev/null 2>&1 || true
   ip link show "$FREE_TURN_WG_IFACE" >/dev/null 2>&1 && ip link del "$FREE_TURN_WG_IFACE" || true
+  if [ "$legacy_wg_rules" = "1" ]; then
+    cleanup_legacy_wg_rules "$FREE_TURN_WG_IFACE" "$FREE_TURN_WG_CIDR" "$wan"
+  fi
 
   export FREE_TURN_WG_SERVER_PRIVATE_KEY="$server_priv"
   export FREE_TURN_WG_SERVER_PUBLIC_KEY="$server_pub"
@@ -685,26 +855,40 @@ setup_wireguard_backend() {
   export FREE_TURN_WG_CIDR FREE_TURN_WAN_IFACE="$wan"
   export FREE_TURN_WG_DNS FREE_TURN_WG_CLIENT_ENDPOINT
 
-  envsubst '$FREE_TURN_WG_SERVER_ADDRESS $FREE_TURN_WG_PORT $FREE_TURN_WG_SERVER_PRIVATE_KEY $FREE_TURN_WG_CLIENT_PUBLIC_KEY $FREE_TURN_WG_CLIENT_ADDRESS $FREE_TURN_WG_CIDR $FREE_TURN_WAN_IFACE' \
+  envsubst '$FREE_TURN_WG_SERVER_ADDRESS $FREE_TURN_WG_PORT $FREE_TURN_WG_SERVER_PRIVATE_KEY $FREE_TURN_WG_CIDR $FREE_TURN_WAN_IFACE' \
     < "$TEMPLATE_DIR/free-turn-wg.conf" \
     > "$server_conf"
+  if [ -s "$peers_tmp" ]; then
+    printf '\n' >> "$server_conf"
+    cat "$peers_tmp" >> "$server_conf"
+  fi
+  if ! grep -Fq "PublicKey = $client_pub" "$server_conf"; then
+    {
+      printf '\n[Peer]\n'
+      printf '# free-turn-client: %s\n' "$FREE_TURN_CLIENT_ID"
+      printf 'PublicKey = %s\n' "$client_pub"
+      printf 'AllowedIPs = %s/32\n' "$FREE_TURN_WG_CLIENT_ADDRESS"
+    } >> "$server_conf"
+  fi
+  rm -f "$peers_tmp"
   chmod 600 "$server_conf"
 
-  envsubst '$FREE_TURN_WG_CLIENT_PRIVATE_KEY $FREE_TURN_WG_CLIENT_ADDRESS $FREE_TURN_WG_DNS $FREE_TURN_WG_SERVER_PUBLIC_KEY $FREE_TURN_WG_CLIENT_ENDPOINT' \
-    < "$TEMPLATE_DIR/free-turn-client-wg.conf" \
-    > "$client_conf"
-  chmod 600 "$client_conf"
+  write_client_wg_conf "$FREE_TURN_CLIENT_ID" "$client_priv" "$FREE_TURN_WG_CLIENT_ADDRESS" "$client_conf"
   ensure_client_store
+  sync_client_server_public_key "$server_pub"
 
-  sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
   systemctl enable --now "wg-quick@$FREE_TURN_WG_IFACE"
 }
 
 install_firewall_service() {
+  systemctl stop free-turn-proxy-firewall.service >/dev/null 2>&1 || true
+  cleanup_free_turn_input_rules
+
   if [ "$FREE_TURN_NO_FIREWALL" = "1" ]; then
-    systemctl disable --now free-turn-proxy-firewall.service >/dev/null 2>&1 || true
+    systemctl disable free-turn-proxy-firewall.service >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/free-turn-proxy-firewall.service
     systemctl daemon-reload >/dev/null 2>&1 || true
+    log "Host firewall management is disabled by explicit request."
     return 0
   fi
 
@@ -721,7 +905,8 @@ install_firewall_service() {
     > /etc/systemd/system/free-turn-proxy-firewall.service
 
   systemctl daemon-reload
-  systemctl enable --now free-turn-proxy-firewall.service
+  systemctl enable free-turn-proxy-firewall.service >/dev/null
+  systemctl restart free-turn-proxy-firewall.service
 }
 
 public_host() {
@@ -774,7 +959,7 @@ base64url_no_pad() {
 }
 
 load_existing_stack_config() {
-  local value listen_addr first_client
+  local value listen_addr first_client server_conf server_address
 
   [ -f "$(env_file)" ] || die "Installed config not found: $(env_file)"
 
@@ -788,8 +973,34 @@ load_existing_stack_config() {
   if value="$(read_env_value MODE)"; then FREE_TURN_MODE="$value"; fi
   if value="$(read_env_value OBF_PROFILE)"; then FREE_TURN_OBF_PROFILE="$value"; fi
   if value="$(read_env_value OBF_KEY)"; then FREE_TURN_OBF_KEY="$value"; fi
+  if value="$(read_env_value OBF_TIMING)"; then FREE_TURN_OBF_TIMING="$value"; fi
+  if value="$(read_env_value DEBUG)"; then FREE_TURN_DEBUG="$value"; fi
+  if value="$(read_env_value CLIENTS_FILE)"; then
+    FREE_TURN_CLIENTS_FILE="$value"
+    if [ -n "$value" ]; then FREE_TURN_ENABLE_CLIENTS_FILE=1; else FREE_TURN_ENABLE_CLIENTS_FILE=0; fi
+  fi
   if value="$(read_env_value FREE_TURN_SETUP_WG)"; then FREE_TURN_SETUP_WG="$value"; fi
   if value="$(read_env_value FREE_TURN_WG_IFACE)"; then FREE_TURN_WG_IFACE="$value"; fi
+  if value="$(read_env_value FREE_TURN_WG_PORT)"; then FREE_TURN_WG_PORT="$value"; fi
+  if value="$(read_env_value FREE_TURN_WG_CIDR)"; then FREE_TURN_WG_CIDR="$value"; fi
+  if value="$(read_env_value FREE_TURN_WG_SERVER_ADDRESS)"; then FREE_TURN_WG_SERVER_ADDRESS="$value"; fi
+  if value="$(read_env_value FREE_TURN_NO_FIREWALL)"; then FREE_TURN_NO_FIREWALL="$value"; fi
+
+  if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
+    server_conf="$(server_wg_conf_file)"
+    if [ -f "$server_conf" ]; then
+      if ! value="$(read_env_value FREE_TURN_WG_PORT)"; then
+        if value="$(read_conf_value "$server_conf" "ListenPort")"; then FREE_TURN_WG_PORT="$value"; fi
+      fi
+      if ! value="$(read_env_value FREE_TURN_WG_SERVER_ADDRESS)"; then
+        if server_address="$(read_conf_value "$server_conf" "Address")"; then
+          FREE_TURN_WG_SERVER_ADDRESS="${server_address%%/*}"
+          FREE_TURN_WG_CIDR="${FREE_TURN_WG_SERVER_ADDRESS%.*}.0/24"
+        fi
+      fi
+      FREE_TURN_CONNECT_ADDR="127.0.0.1:$FREE_TURN_WG_PORT"
+    fi
+  fi
   if [ "$FREE_TURN_NUM_CONNECTIONS_OVERRIDE" != "1" ]; then
     if value="$(read_env_value FREE_TURN_NUM_CONNECTIONS)"; then FREE_TURN_NUM_CONNECTIONS="$value"; fi
   fi
@@ -1124,6 +1335,44 @@ warn_item() {
   printf '  WARN %s\n' "$1"
 }
 
+free_turn_container_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' free-turn-proxy 2>/dev/null)" = "true" ]
+}
+
+free_turn_server_ready() {
+  local started logs
+  started="$(docker inspect -f '{{.State.StartedAt}}' free-turn-proxy 2>/dev/null)"
+  [ -n "$started" ] || return 1
+  logs="$(docker logs --since "$started" free-turn-proxy 2>&1)"
+  grep -Fq 'Listening on' <<< "$logs"
+}
+
+free_turn_container_uses_profile() {
+  docker inspect free-turn-proxy --format '{{range .Config.Env}}{{println .}}{{end}}' |
+    grep -Fxq "OBF_PROFILE=$FREE_TURN_OBF_PROFILE"
+}
+
+free_turn_udp_port_listening() {
+  ss -H -lun | grep -Eq "(^|[[:space:]])[^[:space:]]*:${FREE_TURN_LISTEN_PORT}[[:space:]]"
+}
+
+wait_for_free_turn_ready() {
+  local attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if free_turn_container_running && free_turn_udp_port_listening && free_turn_server_ready && free_turn_container_uses_profile; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  return 1
+}
+
+free_turn_ipv6_backend_blocked() {
+  command -v ip6tables >/dev/null 2>&1 || return 0
+  ip6tables -w -C FREE_TURN_INPUT ! -i lo -p udp --dport "$FREE_TURN_WG_PORT" -j DROP
+}
+
 health_check() {
   local failed compose listen_port firewall_service backend_port
   failed=0
@@ -1134,19 +1383,31 @@ health_check() {
   echo
   echo "Health check:"
   check_item "compose file exists" test -f "$compose" || failed=1
-  check_item "container is running" bash -c '[ "$(docker inspect -f "{{.State.Running}}" free-turn-proxy 2>/dev/null)" = "true" ]' || failed=1
-  check_item "UDP port $listen_port is listening" bash -c "ss -H -lun | grep -Eq '(^|[[:space:]])[^[:space:]]*:${listen_port}[[:space:]]'" || failed=1
+  check_item "server becomes ready within 30 seconds" wait_for_free_turn_ready || failed=1
+  check_item "container is running" free_turn_container_running || failed=1
+  check_item "UDP port $listen_port is listening" free_turn_udp_port_listening || failed=1
+  check_item "server reports ready" free_turn_server_ready || failed=1
+  check_item "container uses OBF profile $FREE_TURN_OBF_PROFILE" free_turn_container_uses_profile || failed=1
   if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
     check_item "WireGuard service is active" systemctl is-active --quiet "wg-quick@$FREE_TURN_WG_IFACE" || failed=1
     check_item "IPv4 forwarding is enabled" bash -c '[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ]' || failed=1
-    backend_port="${FREE_TURN_CONNECT_ADDR##*:}"
-    if ss -H -lun 2>/dev/null | grep -Eq "(^|[[:space:]])([^[:space:]]*:)?${backend_port}[[:space:]]"; then
-      warn_item "backend WireGuard UDP port $backend_port is listening; keep it closed in provider/firewall rules"
-    fi
+    backend_port="$FREE_TURN_WG_PORT"
+    check_item "VPN clients are isolated" iptables -w -C FORWARD -i "$FREE_TURN_WG_IFACE" -o "$FREE_TURN_WG_IFACE" -m comment --comment FREE_TURN_WG -j DROP || failed=1
   fi
   check_item "clients.json exists" test -f "$(clients_file)" || failed=1
-  if systemctl list-unit-files "$firewall_service" --no-legend 2>/dev/null | grep -q "$firewall_service"; then
+  if [ "$FREE_TURN_NO_FIREWALL" = "1" ]; then
+    warn_item "host firewall management is disabled"
+  elif systemctl list-unit-files "$firewall_service" --no-legend 2>/dev/null | grep -q "$firewall_service"; then
     check_item "firewall helper is active" systemctl is-active --quiet "$firewall_service" || failed=1
+    check_item "public UDP port is allowed" iptables -w -C FREE_TURN_INPUT -p udp --dport "$listen_port" -j ACCEPT || failed=1
+    if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
+      check_item "external WireGuard backend is blocked" iptables -w -C FREE_TURN_INPUT ! -i lo -p udp --dport "$backend_port" -j DROP || failed=1
+      check_item "external IPv6 WireGuard backend is blocked" free_turn_ipv6_backend_blocked || failed=1
+      check_item "VPN clients cannot access the VPS" iptables -w -C FREE_TURN_INPUT -i "$FREE_TURN_WG_IFACE" -j DROP || failed=1
+    fi
+  else
+    warn_item "firewall helper is not installed"
+    failed=1
   fi
 
   return "$failed"
@@ -1176,6 +1437,13 @@ restart_command() {
 
 update_command() {
   load_existing_stack_config
+  require_templates
+  validate_config
+  if [ "$FREE_TURN_SETUP_WG" = "1" ]; then
+    setup_wireguard_backend
+  fi
+  persist_free_turn_runtime_config
+  install_firewall_service
   docker compose -f "$(compose_file)" pull
   docker compose -f "$(compose_file)" up -d
   health_check
@@ -1189,6 +1457,10 @@ main() {
   case "$ACTION" in
     install)
       require_templates
+      if [ -f "$(env_file)" ]; then
+        log "Loading the existing Free Turn configuration before reconfiguration."
+        load_existing_stack_config
+      fi
       prompt_config
       validate_config
       install_packages
@@ -1198,7 +1470,7 @@ main() {
       install_firewall_service
       docker compose -f "$(compose_file)" pull
       docker compose -f "$(compose_file)" up -d
-      health_check || true
+      health_check
       print_summary
       ;;
     print-link)

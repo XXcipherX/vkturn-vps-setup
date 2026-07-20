@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=$FREE_TURN_INSTALL_DIR/.env
 ExecStart=/usr/local/lib/free-turn-proxy/apply-firewall.sh
+ExecStop=/usr/local/lib/free-turn-proxy/apply-firewall.sh remove
 RemainAfterExit=yes
 
 [Install]

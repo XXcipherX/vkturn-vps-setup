@@ -180,6 +180,7 @@ sudo bash free-turn-setup.sh
 - генерирует `Client ID` и включает allowlist через `clients.json`;
 - поднимает `free-turn-proxy` в Docker Compose с `network_mode: host`;
 - поднимает локальный WireGuard backend `wgfreeturn` на `127.0.0.1:51820`;
+- закрывает backend-порт WireGuard с внешних интерфейсов, запрещает доступ VPN-клиентов к VPS и изолирует клиентов друг от друга;
 - печатает готовые ссылки для iOS `vkturnproxy://import?...` и Android `freeturn://...`, а также отдельные значения для режима `SRTP-WRAP-S`.
 
 После установки основные файлы находятся здесь:
@@ -192,6 +193,8 @@ sudo bash free-turn-setup.sh
 /opt/free-turn-proxy/clients/<client-id>.conf
 /etc/wireguard/wgfreeturn.conf
 /etc/systemd/system/free-turn-proxy-firewall.service
+/usr/local/lib/free-turn-proxy/apply-firewall.sh
+/usr/local/lib/free-turn-proxy/apply-wg-firewall.sh
 ```
 
 Если скрипт поднимает локальный WireGuard backend, в конце установки он напечатает готовую ссылку:
@@ -226,6 +229,8 @@ VK link: https://vk.com/call/join/<hash>
 
 Android-ссылка создаётся с 10 потоками и 10 потоками на кеш VK credentials. Это безопасное стартовое значение для лимитов VK TURN; число потоков можно увеличить позже в настройках Android-клиента, если сеть и TURN-серверы это позволяют.
 
+iOS-ссылка также создаётся с 10 соединениями. Значение намеренно совпадает с безопасным диапазоном Free Turn: чрезмерное число одновременных TURN-сессий повышает нагрузку, ухудшает маскировку и может увеличить риск ограничений со стороны VK.
+
 Команды управления:
 
 ```bash
@@ -244,7 +249,19 @@ sudo bash free-turn-setup.sh --rotate-obf-key https://vk.com/call/join/<hash>
 
 `--add-client` создает полноценного отдельного клиента: новый `Client ID`, новый WireGuard private/public key, новый IP внутри WireGuard-сети, peer в серверном WireGuard-конфиге и готовые ссылки для iOS и Android.
 
-При повторном запуске установщик переиспользует существующие WireGuard-ключи. Чтобы явно пересоздать ключи, запусти установку с `--rotate-keys`.
+При повторном запуске установщик загружает существующую конфигурацию и сохраняет все WireGuard peers, созданные через `--add-client`. Флаг `--rotate-keys` меняет серверный WireGuard-ключ, сохраняя клиентские ключи и peers, и обновляет публичный ключ сервера во всех сохранённых клиентских конфигах. После такой ротации конфиги или ссылки нужно заново импортировать на устройства: установленная ранее копия всё ещё содержит старый публичный ключ сервера.
+
+`--update` не только загружает свежий Docker image, но и обновляет управляемые firewall/WireGuard helpers. После установки, обновления, перезапуска и ротации OBF-ключа скрипт требует успешный health-check; при неготовом контейнере команда завершается с ошибкой и не сообщает ложный успех.
+
+Управляемые правила можно проверить так:
+
+```bash
+iptables -w -S FREE_TURN_INPUT
+iptables -w -S FORWARD | grep FREE_TURN_WG
+iptables -w -t nat -S POSTROUTING | grep FREE_TURN_WG
+```
+
+В `FREE_TURN_INPUT` должны присутствовать `ACCEPT` для публичного порта Free Turn, `DROP` внешнего WireGuard backend и `DROP` входа с `wgfreeturn`. В `FORWARD` должен присутствовать отдельный `DROP` для трафика `wgfreeturn → wgfreeturn`.
 
 Если у тебя уже есть WireGuard, AmneziaWG или TCP backend на VPS, на вопрос `Create local WireGuard backend on this VPS?` ответь `n` и укажи свой `host:port` в `Existing backend address`.
 
