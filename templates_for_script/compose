@@ -12,4 +12,9 @@ services:
     volumes:
       - ./data:/etc/wdtt
       - ./run-wdtt.sh:/usr/local/bin/run-wdtt.sh:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     entrypoint: ["/usr/local/bin/run-wdtt.sh"]

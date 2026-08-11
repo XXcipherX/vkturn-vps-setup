@@ -220,6 +220,9 @@ check_docker_installer() {
   assert_no_unresolved '\$WDTT_[A-Z0-9_]+' "$out/.env" "$out/docker-compose.yml"
   assert_not_contains "$out/.env" 'WDTT_NO_FIREWALL='
   assert_not_contains "$out/.env" 'WDTT_SUBNET='
+  assert_contains "$out/docker-compose.yml" 'driver: json-file'
+  assert_contains "$out/docker-compose.yml" 'max-size: "10m"'
+  assert_contains "$out/docker-compose.yml" 'max-file: "3"'
 
   if grep -Eq 'iptables .*(-I|-A) INPUT .*WDTT_WG_PORT.*-j ACCEPT' "$out/run-wdtt.sh"; then
     fail "Docker entrypoint exposes the internal WireGuard port"
