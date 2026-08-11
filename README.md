@@ -17,9 +17,9 @@
 
 | Вариант | Скрипт | Протокол | Клиентские ссылки | Особенности |
 | --- | --- | --- | --- | --- |
-| WDTT, systemd | **install.sh** | SRTP-WRAP-A | **wdtt://** | Сборка server core из исходников, нативный systemd-сервис |
-| WDTT, Docker | **vps-setup.sh** | SRTP-WRAP-A | **wdtt://** | Готовый image, интерактивная установка, Docker Compose |
-| Free Turn Proxy | **free-turn-setup.sh** | SRTP-WRAP-S | **vkturnproxy://** и **freeturn://** | Отдельные клиенты, OBF rtpopus3, локальный или внешний backend |
+| WDTT, systemd | **wdtt-systemd-setup.sh** | SRTP-WRAP-A | **wdtt://** | Сборка server core из исходников, нативный systemd-сервис |
+| WDTT, Docker | **wdtt-docker-setup.sh** | SRTP-WRAP-A | **wdtt://** | Готовый image, интерактивная установка, Docker Compose |
+| Free Turn Proxy, Docker | **free-turn-proxy-docker-setup.sh** | SRTP-WRAP-S | **vkturnproxy://** и **freeturn://** | Отдельные клиенты, OBF rtpopus3, локальный или внешний backend |
 
 WDTT и Free Turn используют разные протоколы и форматы конфигурации. Ссылка **wdtt://** не подходит для SRTP-WRAP-S, а ссылки Free Turn не подходят для WDTT.
 
@@ -67,9 +67,9 @@ Free Turn не реализует WDTT GETCONF. При стандартной у
 
 Поддержка ОС различается:
 
-- **install.sh:** Debian 11+, Ubuntu 20.04+, Fedora, RHEL/Rocky/Alma/CentOS/Oracle Linux и Arch-like Linux с systemd;
-- **vps-setup.sh:** системы с apt, dnf, yum или pacman и доступным Docker;
-- **free-turn-setup.sh:** Debian/Ubuntu и другие apt-based системы с systemd.
+- **wdtt-systemd-setup.sh:** Debian 11+, Ubuntu 20.04+, Fedora, RHEL/Rocky/Alma/CentOS/Oracle Linux и Arch-like Linux с systemd;
+- **wdtt-docker-setup.sh:** системы с apt, dnf, yum или pacman и доступным Docker;
+- **free-turn-proxy-docker-setup.sh:** Debian/Ubuntu и другие apt-based системы с systemd и доступным Docker.
 
 Архитектуры автоматической установки Go для нативного WDTT: **amd64** и **arm64**.
 
@@ -108,9 +108,9 @@ apt install -y curl ca-certificates openssl
 Загрузите установщик:
 
 ~~~bash
-curl -fsSL -o /tmp/vkturn-install.sh \
-  https://raw.githubusercontent.com/XXcipherX/vkturn-vps-setup/main/install.sh
-chmod +x /tmp/vkturn-install.sh
+curl -fsSL -o /tmp/wdtt-systemd-setup.sh \
+  https://raw.githubusercontent.com/XXcipherX/vkturn-vps-setup/main/wdtt-systemd-setup.sh
+chmod +x /tmp/wdtt-systemd-setup.sh
 ~~~
 
 Создайте пароль длиной не менее восьми символов. Разрешены латинские буквы, цифры, точка, подчёркивание и дефис:
@@ -123,7 +123,7 @@ printf '%s\n' "$WDTT_PASS"
 Запустите установку:
 
 ~~~bash
-sudo /tmp/vkturn-install.sh install \
+sudo /tmp/wdtt-systemd-setup.sh install \
   --password "$WDTT_PASS" \
   --vk-link "https://vk.ru/call/join/PASTE_YOUR_HASH_HERE"
 ~~~
@@ -136,12 +136,12 @@ wdtt://VPS_IP:56000:56001:9000:PASSWORD:VK_HASH
 
 Ссылка содержит пароль. Её следует передавать только доверенным пользователям и хранить как секрет.
 
-Путь **/tmp/vkturn-install.sh** используется только для быстрого старта и может исчезнуть после перезагрузки. Для последующего администрирования скрипт можно загрузить повторно либо работать из локального clone этого репозитория:
+Путь **/tmp/wdtt-systemd-setup.sh** используется только для быстрого старта и может исчезнуть после перезагрузки. Для последующего администрирования скрипт можно загрузить повторно либо работать из локальной копии репозитория:
 
 ~~~bash
 git clone https://github.com/XXcipherX/vkturn-vps-setup.git
 cd vkturn-vps-setup
-sudo bash install.sh status
+sudo bash wdtt-systemd-setup.sh status
 ~~~
 
 ### Что устанавливается
@@ -177,30 +177,30 @@ sudo bash install.sh status
 
 ~~~bash
 # Состояние сервиса и краткая диагностика
-sudo /tmp/vkturn-install.sh status
+sudo /tmp/wdtt-systemd-setup.sh status
 
 # Логи в реальном времени
-sudo /tmp/vkturn-install.sh logs
+sudo /tmp/wdtt-systemd-setup.sh logs
 
 # Печать ссылки с новым VK hash
-sudo /tmp/vkturn-install.sh link \
+sudo /tmp/wdtt-systemd-setup.sh link \
   --vk-link "https://vk.ru/call/join/NEW_HASH"
 
 # Обновление или переустановка с сохранением базы
-sudo /tmp/vkturn-install.sh install \
+sudo /tmp/wdtt-systemd-setup.sh install \
   --password "$WDTT_PASS" \
   --vk-link "https://vk.ru/call/join/PASTE_YOUR_HASH_HERE"
 
 # Удаление сервиса с сохранением /etc/wdtt
-sudo /tmp/vkturn-install.sh uninstall
+sudo /tmp/wdtt-systemd-setup.sh uninstall
 
 # Полное удаление конфигурации и данных
-sudo /tmp/vkturn-install.sh uninstall --purge
+sudo /tmp/wdtt-systemd-setup.sh uninstall --purge
 ~~~
 
 Если публичный адрес невозможно определить безопасно, сервер будет установлен, но скрипт не напечатает заведомо нерабочую ссылку с приватным IP. В таком случае передайте **--host** явно.
 
-### Параметры install.sh
+### Параметры wdtt-systemd-setup.sh
 
 Параметры можно задавать флагами или соответствующими переменными окружения.
 
@@ -228,7 +228,7 @@ SSH-порт сохраняется для совместимости и уда�
 Пример с доменом:
 
 ~~~bash
-sudo /tmp/vkturn-install.sh install \
+sudo /tmp/wdtt-systemd-setup.sh install \
   --password "$WDTT_PASS" \
   --host "vpn.example.com" \
   --vk-link "https://vk.ru/call/join/PASTE_YOUR_HASH_HERE"
@@ -237,7 +237,7 @@ sudo /tmp/vkturn-install.sh install \
 Пример с Telegram-ботом для управления временными паролями:
 
 ~~~bash
-sudo /tmp/vkturn-install.sh install \
+sudo /tmp/wdtt-systemd-setup.sh install \
   --password "$WDTT_PASS" \
   --admin-id "123456789" \
   --bot-token "123456789:AA..." \
@@ -249,7 +249,7 @@ sudo /tmp/vkturn-install.sh install \
 По умолчанию используется ветка **main-new** форка XXcipherX. Чтобы установить проверенный commit или tag:
 
 ~~~bash
-sudo /tmp/vkturn-install.sh install \
+sudo /tmp/wdtt-systemd-setup.sh install \
   --password "$WDTT_PASS" \
   --source-ref "COMMIT_OR_TAG"
 ~~~
@@ -267,7 +267,7 @@ Docker-вариант устанавливает готовый image **ghcr.io/
 ~~~bash
 git clone https://github.com/XXcipherX/vkturn-vps-setup.git
 cd vkturn-vps-setup
-sudo bash vps-setup.sh
+sudo bash wdtt-docker-setup.sh
 ~~~
 
 Скрипт интерактивно запрашивает пароль, VK Call link/hash, публичный host, порты, DNS и необязательные Telegram-параметры. При повторном запуске сохранённые значения используются как defaults. Пустой ввод не заменяет существующий пароль. Пароль должен содержать 16–128 разрешённых символов, не менее двух классов и не менее восьми различных символов; автоматически сгенерированный пароль уже соответствует этим требованиям.
@@ -295,7 +295,7 @@ sudo bash vps-setup.sh
 ~~~bash
 cd ~/vkturn-vps-setup
 git pull
-sudo bash vps-setup.sh
+sudo bash wdtt-docker-setup.sh
 ~~~
 
 Перед остановкой текущего контейнера скрипт сначала загружает новый image. Ошибка registry или сети поэтому не останавливает уже работающий сервер. Перед обновлением **passwords.json** копируется в каталог backups.
@@ -303,7 +303,7 @@ sudo bash vps-setup.sh
 Другой image можно задать переменной:
 
 ~~~bash
-sudo WDTT_DOCKER_IMAGE=registry.example.com/wdtt-server:tag bash vps-setup.sh
+sudo WDTT_DOCKER_IMAGE=registry.example.com/wdtt-server:tag bash wdtt-docker-setup.sh
 ~~~
 
 Образ должен содержать актуальный server core с поддержкой правил **WDTT_MANAGED**.
@@ -324,14 +324,14 @@ sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
 
 ## Free Turn Proxy
 
-**free-turn-setup.sh** разворачивает [samosvalishe/free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy) в режиме SRTP-WRAP-S. По умолчанию используется профиль маскировки **rtpopus3**, allowlist клиентов и локальный WireGuard backend.
+**free-turn-proxy-docker-setup.sh** разворачивает [samosvalishe/free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy) в режиме SRTP-WRAP-S через Docker Compose. По умолчанию используется профиль маскировки **rtpopus3**, allowlist клиентов и локальный WireGuard backend.
 
 ### Установка
 
 ~~~bash
 git clone https://github.com/XXcipherX/vkturn-vps-setup.git
 cd vkturn-vps-setup
-sudo bash free-turn-setup.sh
+sudo bash free-turn-proxy-docker-setup.sh
 ~~~
 
 Сценарий установки:
@@ -381,7 +381,7 @@ freeturn://...
 Явный параметр **--vk-link** имеет приоритет и обновляет сохранённое значение. Это также позволяет один раз перенести VK-ссылку в конфигурацию старой установки:
 
 ~~~bash
-sudo bash free-turn-setup.sh \
+sudo bash free-turn-proxy-docker-setup.sh \
   --print-link \
   --vk-link "https://vk.ru/call/join/<hash>"
 ~~~
@@ -397,8 +397,8 @@ sudo bash free-turn-setup.sh \
 Создание клиентов с понятными именами:
 
 ~~~bash
-sudo bash free-turn-setup.sh --add-client --client-name iphone
-sudo bash free-turn-setup.sh --add-client --client-name windows
+sudo bash free-turn-proxy-docker-setup.sh --add-client --client-name iphone
+sudo bash free-turn-proxy-docker-setup.sh --add-client --client-name windows
 ~~~
 
 Каждая команда создаёт:
@@ -414,13 +414,13 @@ sudo bash free-turn-setup.sh --add-client --client-name windows
 
 ~~~bash
 # Таблица клиентов, имён и Client ID
-sudo bash free-turn-setup.sh --list-clients
+sudo bash free-turn-proxy-docker-setup.sh --list-clients
 
 # Назначить или изменить имя существующего клиента
-sudo bash free-turn-setup.sh --name-client <client-id> ipad-home
+sudo bash free-turn-proxy-docker-setup.sh --name-client <client-id> ipad-home
 
 # Удалить клиента и отозвать его доступ
-sudo bash free-turn-setup.sh --remove-client <client-id>
+sudo bash free-turn-proxy-docker-setup.sh --remove-client <client-id>
 ~~~
 
 Имена должны быть уникальными. Технический Client ID остаётся случайным и используется протоколом независимо от отображаемого имени.
@@ -428,16 +428,16 @@ sudo bash free-turn-setup.sh --remove-client <client-id>
 ### Команды управления Free Turn
 
 ~~~bash
-sudo bash free-turn-setup.sh --status
-sudo bash free-turn-setup.sh --logs
-sudo bash free-turn-setup.sh --restart
-sudo bash free-turn-setup.sh --update
+sudo bash free-turn-proxy-docker-setup.sh --status
+sudo bash free-turn-proxy-docker-setup.sh --logs
+sudo bash free-turn-proxy-docker-setup.sh --restart
+sudo bash free-turn-proxy-docker-setup.sh --update
 
-sudo bash free-turn-setup.sh --print-link
-sudo bash free-turn-setup.sh --print-link --client-id <client-id>
-sudo bash free-turn-setup.sh --print-qr --client-id <client-id>
+sudo bash free-turn-proxy-docker-setup.sh --print-link
+sudo bash free-turn-proxy-docker-setup.sh --print-link --client-id <client-id>
+sudo bash free-turn-proxy-docker-setup.sh --print-qr --client-id <client-id>
 
-sudo bash free-turn-setup.sh --rotate-obf-key
+sudo bash free-turn-proxy-docker-setup.sh --rotate-obf-key
 ~~~
 
 Дополнительные параметры:
@@ -453,11 +453,11 @@ sudo bash free-turn-setup.sh --rotate-obf-key
 При необходимости VK-ссылку можно передать позиционно или через **--vk-link**:
 
 ~~~bash
-sudo bash free-turn-setup.sh \
+sudo bash free-turn-proxy-docker-setup.sh \
   --print-link "https://vk.ru/call/join/<hash>" \
   --client-id <client-id>
 
-sudo bash free-turn-setup.sh \
+sudo bash free-turn-proxy-docker-setup.sh \
   --rotate-obf-key "https://vk.ru/call/join/<hash>"
 ~~~
 
@@ -471,7 +471,7 @@ sudo bash free-turn-setup.sh \
 
 ~~~bash
 sudo FREE_TURN_IMAGE=registry.example.com/free-turn-proxy:tag \
-  bash free-turn-setup.sh
+  bash free-turn-proxy-docker-setup.sh
 ~~~
 
 ### Внешний backend
@@ -652,7 +652,7 @@ ip -br address show wdtt0
 ### Free Turn
 
 ~~~bash
-sudo bash free-turn-setup.sh --status
+sudo bash free-turn-proxy-docker-setup.sh --status
 docker ps --filter name=free-turn-proxy
 docker logs --since 10m free-turn-proxy
 systemctl is-active wg-quick@wgfreeturn
@@ -737,13 +737,13 @@ Root-пользователь VPS имеет доступ к этим данны
 ## Структура репозитория
 
 ~~~text
-install.sh
+wdtt-systemd-setup.sh
   Нативная установка WDTT с systemd и сборкой из исходников.
 
-vps-setup.sh
+wdtt-docker-setup.sh
   Интерактивная Docker Compose установка WDTT.
 
-free-turn-setup.sh
+free-turn-proxy-docker-setup.sh
   Установка и управление Free Turn Proxy.
 
 templates_for_script/

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-trap 'echo "Error on line $LINENO. Exit code: $?" >&2' ERR
+trap 'echo "[free-turn-proxy-docker-setup] Error on line $LINENO. Exit code: $?" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${FREE_TURN_INSTALL_DIR:-/opt/free-turn-proxy}"
@@ -38,8 +38,8 @@ FREE_TURN_CLIENT_ID_OVERRIDE=0
 FREE_TURN_NUM_CONNECTIONS_OVERRIDE=0
 FREE_TURN_VK_LINK_OVERRIDE=0
 
-log() { printf '[free-turn-setup] %s\n' "$*"; }
-die() { printf '[free-turn-setup] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[free-turn-proxy-docker-setup] %s\n' "$*"; }
+die() { printf '[free-turn-proxy-docker-setup] ERROR: %s\n' "$*" >&2; exit 1; }
 
 valid_port() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
@@ -96,18 +96,18 @@ valid_ipv4_cidr() {
 usage() {
   cat <<EOF
 Usage:
-  sudo bash free-turn-setup.sh
-  sudo bash free-turn-setup.sh --print-link [vk-link-or-hash]
-  sudo bash free-turn-setup.sh --print-qr [vk-link-or-hash]
-  sudo bash free-turn-setup.sh --add-client [client-id] [--client-name <name>]
-  sudo bash free-turn-setup.sh --name-client <client-id> <name>
-  sudo bash free-turn-setup.sh --remove-client <client-id>
-  sudo bash free-turn-setup.sh --list-clients
-  sudo bash free-turn-setup.sh --status
-  sudo bash free-turn-setup.sh --logs
-  sudo bash free-turn-setup.sh --restart
-  sudo bash free-turn-setup.sh --update
-  sudo bash free-turn-setup.sh --rotate-obf-key [vk-link-or-hash]
+  sudo bash free-turn-proxy-docker-setup.sh
+  sudo bash free-turn-proxy-docker-setup.sh --print-link [vk-link-or-hash]
+  sudo bash free-turn-proxy-docker-setup.sh --print-qr [vk-link-or-hash]
+  sudo bash free-turn-proxy-docker-setup.sh --add-client [client-id] [--client-name <name>]
+  sudo bash free-turn-proxy-docker-setup.sh --name-client <client-id> <name>
+  sudo bash free-turn-proxy-docker-setup.sh --remove-client <client-id>
+  sudo bash free-turn-proxy-docker-setup.sh --list-clients
+  sudo bash free-turn-proxy-docker-setup.sh --status
+  sudo bash free-turn-proxy-docker-setup.sh --logs
+  sudo bash free-turn-proxy-docker-setup.sh --restart
+  sudo bash free-turn-proxy-docker-setup.sh --update
+  sudo bash free-turn-proxy-docker-setup.sh --rotate-obf-key [vk-link-or-hash]
 
 Options:
   --vk-link <value>       VK call link/hash for the generated iOS import link.

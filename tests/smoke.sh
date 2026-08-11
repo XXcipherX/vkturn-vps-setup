@@ -74,8 +74,8 @@ check_systemd_installer() {
     export WDTT_FIREWALL_SCRIPT="$out/usr/local/lib/wdtt/apply-firewall.sh"
     export WDTT_RUN_SCRIPT="$out/usr/local/lib/wdtt/run-wdtt.sh"
 
-    # shellcheck source=../install.sh
-    source "$ROOT/install.sh"
+    # shellcheck source=../wdtt-systemd-setup.sh
+    source "$ROOT/wdtt-systemd-setup.sh"
     PASSWORD=T7mK2_vQ9-pR4.xL
     PUBLIC_HOST=example.com
     DTLS_PORT=56000
@@ -139,14 +139,14 @@ check_systemd_installer() {
     fi
   )
 
-  assert_contains "$ROOT/install.sh" 'https://github.com/XXcipherX/proxy-turn-vk-android.git'
-  assert_contains "$ROOT/install.sh" 'WDTT_SOURCE_REF_DEFAULT="main-new"'
-  assert_contains "$ROOT/install.sh" 'WDTT_GO_VERSION_DEFAULT="1.26.5"'
-  assert_contains "$ROOT/install.sh" 'app/src/main/assets/linux-server'
-  assert_contains "$ROOT/install.sh" 'ExecStart=$WDTT_RUN_SCRIPT'
-  assert_contains "$ROOT/install.sh" 'UMask=0077'
-  assert_contains "$ROOT/install.sh" "grep -Fq '[SERVER] Готов'"
-  assert_contains "$ROOT/install.sh" 'property=MainPID'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'https://github.com/XXcipherX/proxy-turn-vk-android.git'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'WDTT_SOURCE_REF_DEFAULT="main-new"'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'WDTT_GO_VERSION_DEFAULT="1.26.5"'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'app/src/main/assets/linux-server'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'ExecStart=$WDTT_RUN_SCRIPT'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'UMask=0077'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" "grep -Fq '[SERVER] Готов'"
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'property=MainPID'
   assert_contains "$ROOT/examples/wdtt.env.example" 'WDTT_SOURCE_REF=main-new'
   pass "systemd installer validation and generated helpers"
 }
@@ -156,8 +156,8 @@ check_docker_installer() {
   mkdir -p "$out/data"
 
   (
-    # shellcheck source=../vps-setup.sh
-    source "$ROOT/vps-setup.sh"
+    # shellcheck source=../wdtt-docker-setup.sh
+    source "$ROOT/wdtt-docker-setup.sh"
     WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest
     WDTT_PASSWORD=T7mK2_vQ9-pR4.xL
     WDTT_VK_HASH=smoke_hash
@@ -237,11 +237,11 @@ check_docker_installer() {
   assert_not_contains "$out/run-wdtt.sh" '-A POSTROUTING'
   assert_contains "$out/run-wdtt.sh" "trap 'cleanup_rules || true' EXIT"
   assert_not_contains "$out/run-wdtt.sh" 'export PATH='
-  assert_contains "$ROOT/vps-setup.sh" "grep -F '[SERVER] Готов'"
-  assert_contains "$ROOT/vps-setup.sh" 'load_saved_config'
-  assert_contains "$ROOT/vps-setup.sh" 'chmod 600 "$ENV_FILE"'
-  assert_before "$ROOT/vps-setup.sh" 'docker pull "$WDTT_DOCKER_IMAGE"' 'docker compose -f "$COMPOSE_FILE" down'
-  assert_not_contains "$ROOT/vps-setup.sh" 'hostname -I'
+  assert_contains "$ROOT/wdtt-docker-setup.sh" "grep -F '[SERVER] Готов'"
+  assert_contains "$ROOT/wdtt-docker-setup.sh" 'load_saved_config'
+  assert_contains "$ROOT/wdtt-docker-setup.sh" 'chmod 600 "$ENV_FILE"'
+  assert_before "$ROOT/wdtt-docker-setup.sh" 'docker pull "$WDTT_DOCKER_IMAGE"' 'docker compose -f "$COMPOSE_FILE" down'
+  assert_not_contains "$ROOT/wdtt-docker-setup.sh" 'hostname -I'
   [ "$(find "$out/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "Docker installer did not back up passwords.json"
   [ "$(stat -c '%a' "$out/backups")" = 700 ] || fail "Docker backup directory is not mode 700"
   pass "Docker installer validation, rendering, Compose config, and firewall invariants"
@@ -282,8 +282,8 @@ check_free_turn_installer() {
   export FREE_TURN_INSTALL_DIR=/opt/free-turn-proxy
 
   (
-    # shellcheck source=../free-turn-setup.sh
-    source "$ROOT/free-turn-setup.sh"
+    # shellcheck source=../free-turn-proxy-docker-setup.sh
+    source "$ROOT/free-turn-proxy-docker-setup.sh"
     validate_config
     if ! (parse_args --add-client --client-name iphone --vk-link 'https://vk.ru/call/join/smoke-hash?from=test'; [ "$ACTION" = add-client ] && [ "$FREE_TURN_CLIENT_NAME" = iphone ] && [ "$FREE_TURN_VK_LINK_OVERRIDE" = 1 ]); then
       fail "Free Turn did not parse a named client creation"
@@ -375,12 +375,12 @@ check_free_turn_installer() {
   assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" '-i "$IFACE" -o "$IFACE" -m comment --comment "$COMMENT" -j DROP'
   assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" '-i "$IFACE" -s "$CIDR" -o "$WAN"'
   assert_contains "$ROOT/templates_for_script/free-turn-wg-firewall.sh" 'COMMENT=FREE_TURN_WG'
-  assert_contains "$ROOT/free-turn-setup.sh" 'FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"'
-  assert_contains "$ROOT/free-turn-setup.sh" 'extract_wg_peers "$server_conf" "$peers_tmp"'
-  assert_contains "$ROOT/free-turn-setup.sh" 'sync_client_server_public_key "$server_pub"'
-  assert_contains "$ROOT/free-turn-setup.sh" 'sudo bash free-turn-setup.sh --name-client <client-id> <name>'
-  assert_not_contains "$ROOT/free-turn-setup.sh" 'health_check || true'
-  assert_not_contains "$ROOT/free-turn-setup.sh" 'up -d --force-recreate >/dev/null 2>&1 || true'
+  assert_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'FREE_TURN_NUM_CONNECTIONS="${FREE_TURN_NUM_CONNECTIONS:-10}"'
+  assert_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'extract_wg_peers "$server_conf" "$peers_tmp"'
+  assert_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'sync_client_server_public_key "$server_pub"'
+  assert_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'sudo bash free-turn-proxy-docker-setup.sh --name-client <client-id> <name>'
+  assert_not_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'health_check || true'
+  assert_not_contains "$ROOT/free-turn-proxy-docker-setup.sh" 'up -d --force-recreate >/dev/null 2>&1 || true'
   pass "Free Turn validation, peer preservation, firewall invariants, and Compose rendering"
 }
 

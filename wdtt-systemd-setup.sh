@@ -61,14 +61,14 @@ require_arg() {
 
 usage() {
   cat <<'USAGE'
-vkturn-vps-setup install.sh
+vkturn-vps-setup wdtt-systemd-setup.sh
 
 Usage:
-  sudo bash install.sh install --password PASS [--vk-link VK_JOIN_URL_OR_HASH]
-  sudo bash install.sh status
-  sudo bash install.sh logs
-  sudo bash install.sh link --vk-link VK_JOIN_URL_OR_HASH
-  sudo bash install.sh uninstall [--purge]
+  sudo bash wdtt-systemd-setup.sh install --password PASS [--vk-link VK_JOIN_URL_OR_HASH]
+  sudo bash wdtt-systemd-setup.sh status
+  sudo bash wdtt-systemd-setup.sh logs
+  sudo bash wdtt-systemd-setup.sh link --vk-link VK_JOIN_URL_OR_HASH
+  sudo bash wdtt-systemd-setup.sh uninstall [--purge]
 
 Main options:
   --password PASS       WDTT main tunnel password. Required for first install.
@@ -248,7 +248,7 @@ parse_args() {
 }
 
 need_root() {
-  [ "$(id -u)" -eq 0 ] || die "Run as root: sudo bash install.sh $ACTION ..."
+  [ "$(id -u)" -eq 0 ] || die "Run as root: sudo bash wdtt-systemd-setup.sh $ACTION ..."
 }
 
 validate_port() {
