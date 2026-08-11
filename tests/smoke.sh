@@ -76,7 +76,7 @@ check_systemd_installer() {
 
     # shellcheck source=../install.sh
     source "$ROOT/install.sh"
-    PASSWORD=smoke-test-password
+    PASSWORD=T7mK2_vQ9-pR4.xL
     PUBLIC_HOST=example.com
     DTLS_PORT=56000
     WG_PORT=56001
@@ -84,6 +84,19 @@ check_systemd_installer() {
     DNS_SERVERS=1.1.1.1,1.0.0.1
     validate_inputs
     validate_password
+
+    if (PASSWORD=short-pass1; validate_password >/dev/null 2>&1); then
+      fail "systemd installer accepted a password shorter than the server minimum"
+    fi
+    if (PASSWORD=abcdefghijklmnop; validate_password >/dev/null 2>&1); then
+      fail "systemd installer accepted a password with only one character class"
+    fi
+    if (PASSWORD=aaaaaaaa1_______; validate_password >/dev/null 2>&1); then
+      fail "systemd installer accepted fewer than eight distinct password characters"
+    fi
+    if (PASSWORD=Password1234____; validate_password >/dev/null 2>&1); then
+      fail "systemd installer accepted a common weak password pattern"
+    fi
     mkdir -p "$WDTT_CONFIG_DIR"
     printf '{"passwords":{},"devices":{}}\n' > "$WDTT_CONFIG_DIR/passwords.json"
     backup_database
@@ -146,7 +159,7 @@ check_docker_installer() {
     # shellcheck source=../vps-setup.sh
     source "$ROOT/vps-setup.sh"
     WDTT_DOCKER_IMAGE=ghcr.io/xxcipherx/wdtt-server:latest
-    WDTT_PASSWORD=smoke-test-password
+    WDTT_PASSWORD=T7mK2_vQ9-pR4.xL
     WDTT_VK_HASH=smoke_hash
     WDTT_PUBLIC_HOST=example.com
     WDTT_DTLS_PORT=56000
@@ -157,6 +170,19 @@ check_docker_installer() {
     WDTT_BOT_TOKEN=
     WDTT_SUBNET=10.66.66.0/24
     validate_config
+
+    if (WDTT_PASSWORD=short-pass1; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a password shorter than the server minimum"
+    fi
+    if (WDTT_PASSWORD=abcdefghijklmnop; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a password with only one character class"
+    fi
+    if (WDTT_PASSWORD=aaaaaaaa1_______; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted fewer than eight distinct password characters"
+    fi
+    if (WDTT_PASSWORD=Password1234____; validate_config >/dev/null 2>&1); then
+      fail "Docker installer accepted a common weak password pattern"
+    fi
 
     if (WDTT_DTLS_PORT=56000; WDTT_WG_PORT=56000; validate_config >/dev/null 2>&1); then
       fail "Docker installer accepted colliding DTLS and WG ports"

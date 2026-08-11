@@ -173,6 +173,34 @@ validate_no_whitespace() {
   fi
 }
 
+validate_wdtt_password_value() {
+  local password="$1" lower char weak classes=0 index
+  local -A distinct=()
+
+  [ "${#password}" -ge 16 ] || die "Password is too short. Use at least 16 characters."
+  [ "${#password}" -le 128 ] || die "Password is too long. Use 128 characters or fewer."
+  if ! printf '%s' "$password" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    die "For iOS wdtt:// links, use only A-Z, a-z, 0-9, dot, underscore and dash in the password."
+  fi
+
+  [[ "$password" =~ [a-z] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [A-Z] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [0-9] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [._-] ]] && classes=$((classes + 1))
+  [ "$classes" -ge 2 ] || die "Password is too predictable. Use at least two character classes."
+
+  for ((index = 0; index < ${#password}; index++)); do
+    char="${password:index:1}"
+    distinct["$char"]=1
+  done
+  [ "${#distinct[@]}" -ge 8 ] || die "Password is too predictable. Use at least eight distinct characters."
+
+  lower="${password,,}"
+  for weak in password changeme qwerty letmein 123456 adminadmin; do
+    [[ "$lower" != *"$weak"* ]] || die "Password contains a common weak pattern. Use a randomly generated password."
+  done
+}
+
 install_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
@@ -203,8 +231,7 @@ validate_config() {
   validate_no_whitespace WDTT_ADMIN_ID "$WDTT_ADMIN_ID"
   validate_no_whitespace WDTT_BOT_TOKEN "$WDTT_BOT_TOKEN"
 
-  printf '%s\n' "$WDTT_PASSWORD" | grep -Eq '^[A-Za-z0-9._-]{8,128}$' || \
-    die "Password must be 8-128 chars and contain only A-Z, a-z, 0-9, dot, underscore and dash."
+  validate_wdtt_password_value "$WDTT_PASSWORD"
   printf '%s\n' "$WDTT_DOCKER_IMAGE" | grep -Eq '^[A-Za-z0-9._/:@-]+$' || \
     die "WDTT_DOCKER_IMAGE contains unsupported characters."
   validate_dns_servers "$WDTT_DNS"

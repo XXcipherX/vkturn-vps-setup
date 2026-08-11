@@ -259,13 +259,37 @@ validate_port() {
   [ "$value" -ge 1 ] && [ "$value" -le 65535 ] || die "$name must be in range 1..65535, got: $value"
 }
 
-validate_password() {
-  [ -n "$PASSWORD" ] || die "WDTT password is required. Pass --password or set WDTT_PASSWORD."
-  [ "${#PASSWORD}" -ge 8 ] || die "Password is too short. Use at least 8 characters."
-  [ "${#PASSWORD}" -le 128 ] || die "Password is too long. Use 128 characters or fewer."
-  if ! printf '%s' "$PASSWORD" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+validate_wdtt_password_value() {
+  local password="$1" lower char weak classes=0 index
+  local -A distinct=()
+
+  [ "${#password}" -ge 16 ] || die "Password is too short. Use at least 16 characters."
+  [ "${#password}" -le 128 ] || die "Password is too long. Use 128 characters or fewer."
+  if ! printf '%s' "$password" | grep -Eq '^[A-Za-z0-9._-]+$'; then
     die "For iOS wdtt:// links, use only A-Z, a-z, 0-9, dot, underscore and dash in the password."
   fi
+
+  [[ "$password" =~ [a-z] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [A-Z] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [0-9] ]] && classes=$((classes + 1))
+  [[ "$password" =~ [._-] ]] && classes=$((classes + 1))
+  [ "$classes" -ge 2 ] || die "Password is too predictable. Use at least two character classes."
+
+  for ((index = 0; index < ${#password}; index++)); do
+    char="${password:index:1}"
+    distinct["$char"]=1
+  done
+  [ "${#distinct[@]}" -ge 8 ] || die "Password is too predictable. Use at least eight distinct characters."
+
+  lower="${password,,}"
+  for weak in password changeme qwerty letmein 123456 adminadmin; do
+    [[ "$lower" != *"$weak"* ]] || die "Password contains a common weak pattern. Use a randomly generated password."
+  done
+}
+
+validate_password() {
+  [ -n "$PASSWORD" ] || die "WDTT password is required. Pass --password or set WDTT_PASSWORD."
+  validate_wdtt_password_value "$PASSWORD"
 }
 
 validate_no_whitespace() {
