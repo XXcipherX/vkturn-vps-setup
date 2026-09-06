@@ -217,7 +217,7 @@ sudo /tmp/wdtt-systemd-setup.sh uninstall --purge
 | --bot-token | WDTT_BOT_TOKEN | Telegram bot token |
 | --source-repo | WDTT_SOURCE_REPO | Репозиторий server core |
 | --source-ref | WDTT_SOURCE_REF | Ветка, tag или commit |
-| --go-version | WDTT_GO_VERSION | Версия Go, по умолчанию 1.26.5 |
+| --go-version | WDTT_GO_VERSION | Версия Go, по умолчанию 1.27.1 |
 
 Пароль должен содержать от 8 до 128 символов из набора **A-Z**, **a-z**, **0-9**, **.**, **_**, **-**. Ограничение исключает неоднозначное разбиение ссылки **wdtt://**.
 

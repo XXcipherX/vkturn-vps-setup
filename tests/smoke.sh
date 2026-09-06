@@ -115,7 +115,7 @@ check_systemd_installer() {
     assert_not_contains "$WDTT_FIREWALL_SCRIPT" 'MASQUERADE'
     assert_not_contains "$WDTT_RUN_SCRIPT" 'export PATH='
     assert_contains "$WDTT_RUN_SCRIPT" '-password="${WDTT_PASSWORD}"'
-    assert_contains "$WDTT_ENV_FILE" 'WDTT_GO_VERSION=1.26.5'
+    assert_contains "$WDTT_ENV_FILE" 'WDTT_GO_VERSION=1.27.1'
     [ "$(find "$WDTT_CONFIG_DIR/backups" -type f -name 'passwords-*.json' | wc -l)" -eq 1 ] || fail "systemd installer did not back up passwords.json"
     [ "$(stat -c '%a' "$WDTT_CONFIG_DIR/backups")" = 700 ] || fail "systemd backup directory is not mode 700"
 
@@ -141,7 +141,7 @@ check_systemd_installer() {
 
   assert_contains "$ROOT/wdtt-systemd-setup.sh" 'https://github.com/XXcipherX/proxy-turn-vk-android.git'
   assert_contains "$ROOT/wdtt-systemd-setup.sh" 'WDTT_SOURCE_REF_DEFAULT="main-new"'
-  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'WDTT_GO_VERSION_DEFAULT="1.26.5"'
+  assert_contains "$ROOT/wdtt-systemd-setup.sh" 'WDTT_GO_VERSION_DEFAULT="1.27.1"'
   assert_contains "$ROOT/wdtt-systemd-setup.sh" 'app/src/main/assets/linux-server'
   assert_contains "$ROOT/wdtt-systemd-setup.sh" 'ExecStart=$WDTT_RUN_SCRIPT'
   assert_contains "$ROOT/wdtt-systemd-setup.sh" 'UMask=0077'

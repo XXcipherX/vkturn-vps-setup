@@ -5,7 +5,7 @@ SCRIPT_VERSION="0.3.0"
 
 WDTT_SOURCE_REPO_DEFAULT="https://github.com/XXcipherX/proxy-turn-vk-android.git"
 WDTT_SOURCE_REF_DEFAULT="main-new"
-WDTT_GO_VERSION_DEFAULT="1.26.5"
+WDTT_GO_VERSION_DEFAULT="1.27.1"
 
 WDTT_INSTALL_ROOT="${WDTT_INSTALL_ROOT:-/opt/wdtt}"
 WDTT_SOURCE_DIR="${WDTT_SOURCE_DIR:-$WDTT_INSTALL_ROOT/source}"
@@ -82,7 +82,7 @@ Main options:
   --bot-token VALUE     Optional Telegram bot token for WDTT access manager.
   --source-repo URL     Source repo to build wdtt-server from.
   --source-ref REF      Branch, tag, or commit. Default: main-new.
-  --go-version VERSION  Go version used if system Go is too old. Default: 1.26.5.
+  --go-version VERSION  Go version used if system Go is too old. Default: 1.27.1.
   --purge               With uninstall: remove /etc/wdtt too.
 
 Environment variables mirror the option names, for example:
