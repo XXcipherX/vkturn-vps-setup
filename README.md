@@ -3,10 +3,11 @@
 [![Smoke tests](https://github.com/XXcipherX/vkturn-vps-setup/actions/workflows/smoke.yml/badge.svg)](https://github.com/XXcipherX/vkturn-vps-setup/actions/workflows/smoke.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Набор установщиков для развёртывания VK TURN-прокси на Linux VPS. Репозиторий поддерживает два серверных протокола и три варианта установки:
+Набор установщиков для развёртывания VK TURN-прокси на Linux VPS. Репозиторий поддерживает три серверных протокола и четыре варианта установки:
 
 - **WDTT + systemd** — сборка актуального server core из исходников;
 - **WDTT + Docker Compose** — запуск готового контейнерного образа;
+- **CSQTT + Docker Compose** — отдельный Rust-сервер с userspace TUN и веб-панелью;
 - **Free Turn Proxy + Docker Compose** — альтернативный режим SRTP-WRAP-S с локальным или внешним backend.
 
 Установщики настраивают не только процесс сервера, но и необходимые сетевые параметры, firewall, автозапуск, резервное копирование состояния и проверку готовности. Документация ниже описывает устройство каждого варианта, установку, обновление, управление клиентами и диагностику.
@@ -19,11 +20,12 @@
 | --- | --- | --- | --- | --- |
 | WDTT, systemd | **wdtt-systemd-setup.sh** | SRTP-WRAP-A | **wdtt://** | Сборка server core из исходников, нативный systemd-сервис |
 | WDTT, Docker | **wdtt-docker-setup.sh** | SRTP-WRAP-A | **wdtt://** | Готовый image, интерактивная установка, Docker Compose |
+| CSQTT, Docker | **csqtt-docker-setup.sh** | CSQTT-WIRE-3 | **csqtt://** | Rust server core, userspace TUN, встроенная HTTPS-панель |
 | Free Turn Proxy, Docker | **free-turn-proxy-docker-setup.sh** | SRTP-WRAP-S | **vkturnproxy://** и **freeturn://** | Отдельные клиенты, OBF rtpopus3, локальный или внешний backend |
 
-WDTT и Free Turn используют разные протоколы и форматы конфигурации. Ссылка **wdtt://** не подходит для SRTP-WRAP-S, а ссылки Free Turn не подходят для WDTT.
+Для каждого варианта используйте указанные в таблице формат ссылки и режим клиента. Для CSQTT нужен клиент с поддержкой CSQTT-WIRE-3: Android-клиент из репозитория CSQTT или iOS-клиент [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios) версии **v1.0-build364** либо новее.
 
-Оба варианта по умолчанию используют публичный порт **56000/udp**. Для одновременного размещения WDTT и Free Turn на одном VPS необходимо назначить разные публичные порты и внимательно проверить firewall. Для обычной эксплуатации проще использовать отдельный VPS для каждого сервера.
+Порты по умолчанию приведены в таблицах ниже. При размещении нескольких серверов на одном VPS необходимо назначить непересекающиеся порты и проверить firewall. Для обычной эксплуатации проще использовать отдельный VPS для каждого сервера.
 
 ## Архитектура
 
@@ -42,6 +44,20 @@ Android или iOS
 WDTT получает соединение через VK TURN, проверяет пароль, выдаёт клиенту WireGuard-конфигурацию через GETCONF и создаёт внутренний туннель. Отдельно устанавливать WireGuard-сервер для WDTT не требуется.
 
 Используется серверная часть форка [XXcipherX/proxy-turn-vk-android](https://github.com/XXcipherX/proxy-turn-vk-android), ветка **main-new**. Она совместима с Android-клиентом из того же репозитория и iOS-клиентом [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios).
+
+### CSQTT / CSQTT-WIRE-3
+
+~~~text
+CSQTT Android или совместимый iOS-клиент
+  -> VK TURN relay
+  -> RTP AEAD / CSQTT-WIRE-3
+  -> csqtt на VPS
+  -> userspace TUN, интерфейс csqtt1
+  -> NAT
+  -> Internet
+~~~
+
+CSQTT — сервер на Rust, который передаёт IP-пакеты через RTP AEAD / CSQTT-WIRE-3 и userspace TUN. Установщик использует server core и Android-клиент из [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt). iOS-клиент [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios) поддерживает тот же протокол начиная с **v1.0-build364** и принимает напечатанную установщиком ссылку **csqtt://**.
 
 ### Free Turn Proxy / SRTP-WRAP-S
 
@@ -69,6 +85,7 @@ Free Turn не реализует WDTT GETCONF. При стандартной у
 
 - **wdtt-systemd-setup.sh:** Debian 11+, Ubuntu 20.04+, Fedora, RHEL/Rocky/Alma/CentOS/Oracle Linux и Arch-like Linux с systemd;
 - **wdtt-docker-setup.sh:** системы с apt, dnf, yum или pacman и доступным Docker;
+- **csqtt-docker-setup.sh:** системы с apt, dnf, yum или pacman и доступным Docker;
 - **free-turn-proxy-docker-setup.sh:** Debian/Ubuntu и другие apt-based системы с systemd и доступным Docker.
 
 Архитектуры автоматической установки Go для нативного WDTT: **amd64** и **arm64**.
@@ -90,6 +107,15 @@ Free Turn не реализует WDTT GETCONF. При стандартной у
 | Локальный WireGuard backend | 127.0.0.1:51820/udp | Закрыть |
 | Клиентская подсеть | 10.13.13.0/24 | Не маршрутизировать напрямую |
 | Интерфейс | wgfreeturn | Внутренний |
+
+### Порты CSQTT по умолчанию
+
+| Назначение | Значение | Доступ извне |
+| --- | --- | --- |
+| RTP AEAD / CSQTT-WIRE-3 | 46000/udp | Открыть |
+| HTTP/HTTPS веб-панель | 46002/tcp | Ограничить доверенными адресами, если возможно |
+| Клиентская подсеть | 10.66.67.0/24 | Не маршрутизировать напрямую |
+| Интерфейс | csqtt1 | Внутренний |
 
 ## WDTT с systemd
 
@@ -321,6 +347,65 @@ sudo docker compose -f /opt/vkturn-vps-setup/docker-compose.yml down
 После **pull** следует выполнять **up -d**. Команда **restart** перезапускает существующий контейнер и не переводит его на загруженный image.
 
 Штатный **docker compose down** удаляет правила зон **WDTT_DOCKER** и **WDTT_MANAGED**. При запуске контейнера они создаются заново.
+
+## CSQTT с Docker Compose
+
+**csqtt-docker-setup.sh** разворачивает Rust-сервер CSQTT из образа **ghcr.io/xxcipherx/csqtt-server:latest**. Установщик включает forwarding на хосте, после чего контейнер в host network создаёт TUN-интерфейс **csqtt1**, настраивает NAT и TCP MSS clamping. Вместо полного privileged-режима контейнер получает только требуемые сетевые capabilities **NET_ADMIN** и **NET_RAW**.
+
+### Установка
+
+~~~bash
+git clone https://github.com/XXcipherX/vkturn-vps-setup.git
+cd vkturn-vps-setup
+sudo bash csqtt-docker-setup.sh
+~~~
+
+Скрипт запрашивает основной пароль, логин и пароль веб-панели, до шести необязательных VK Call hash, публичный host и два порта. При первой установке пустой основной пароль генерируется автоматически. После успешного запуска установщик печатает адрес, логин и пароль веб-панели. При обновлении пустой ввод сохраняет значение из базы CSQTT; установщик намеренно не извлекает его обратно из SQLite и поэтому повторно не печатает основную ссылку.
+
+Основные пути:
+
+~~~text
+/opt/csqtt-docker/docker-compose.yml
+/opt/csqtt-docker/.env
+/opt/csqtt-docker/run-csqtt.sh
+/opt/csqtt-docker/data/csqtt.db
+/opt/csqtt-docker/backups/
+~~~
+
+Основной пароль передаётся серверу через одноразовый файл **deploy-overrides.json**. После импорта CSQTT сохраняет его в SQLite и удаляет файл. Благодаря этому изменения основного пароля и DNS в веб-панели не откатываются при автоматическом рестарте контейнера. В **.env** остаются web credentials и параметры самого Docker-развёртывания; файл имеет права 600.
+
+После успешной первой установки выводятся ссылка вида:
+
+~~~text
+csqtt://connect?v=2&host=VPS_IP&peer=46000&password=PASSWORD&hashes=VK_HASH
+~~~
+
+и адрес панели **https://VPS_IP:46002/**. Сервер самостоятельно создаёт TLS-сертификат при первом запуске, поэтому браузер может показать предупреждение для самоподписанного сертификата.
+
+В CSQTT каждый пароль привязывается к `device_id` первого успешно подключившегося устройства. Основная ссылка подходит только для этого устройства. Для каждого дополнительного Android- или iOS-устройства создайте отдельный клиентский пароль и ссылку в веб-панели; одна общая ссылка на несколько устройств не поддерживается протоколом.
+
+### Обновление и управление
+
+~~~bash
+cd ~/vkturn-vps-setup
+git pull
+sudo bash csqtt-docker-setup.sh
+
+sudo docker compose -f /opt/csqtt-docker/docker-compose.yml ps
+sudo docker compose -f /opt/csqtt-docker/docker-compose.yml logs -f
+sudo docker compose -f /opt/csqtt-docker/docker-compose.yml pull
+sudo docker compose -f /opt/csqtt-docker/docker-compose.yml up -d
+sudo docker compose -f /opt/csqtt-docker/docker-compose.yml down
+~~~
+
+Перед остановкой работающего контейнера установщик загружает и проверяет новый image. После остановки он копирует SQLite вместе с WAL/SHM sidecars, legacy JSON и TLS-файлы в каталог backups. Другой image можно задать переменной:
+
+~~~bash
+sudo CSQTT_DOCKER_IMAGE=registry.example.com/csqtt-server:tag \
+  bash csqtt-docker-setup.sh
+~~~
+
+Стандартный image публикуется ручным workflow **Build and push server image** в репозитории [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt/actions/workflows/docker-image.yml). Для установки без `docker login ghcr.io` пакет GHCR должен быть публичным.
 
 ## Free Turn Proxy
 
@@ -569,6 +654,14 @@ SSH — разрешить отдельно только по принятой �
 SSH — разрешить отдельно
 ~~~
 
+Для CSQTT с defaults:
+
+~~~text
+46000/udp — разрешить входящий трафик
+46002/tcp — разрешить для доступа к веб-панели; по возможности ограничить доверенными адресами
+SSH — разрешить отдельно
+~~~
+
 ### Владение правилами WDTT
 
 - **WDTT_SETUP** — нативный установщик: публичный DTLS ingress, блокировка внешнего WireGuard и TCPMSS clamp;
@@ -585,6 +678,16 @@ iptables -w -t nat -S | grep WDTT_MANAGED
 ~~~
 
 Для Docker замените **WDTT_SETUP** на **WDTT_DOCKER**.
+
+### Владение правилами CSQTT
+
+Контейнерный entrypoint создаёт правила с комментарием **CSQTT_DOCKER**: два ingress-разрешения, направленный FORWARD для **csqtt1**, MASQUERADE подсети **10.66.67.0/24** и TCPMSS clamp. При штатной остановке контейнера эти правила и TUN-интерфейс удаляются.
+
+~~~bash
+iptables -w -S | grep CSQTT_DOCKER
+iptables -w -t nat -S POSTROUTING | grep CSQTT_DOCKER
+iptables -w -t mangle -S FORWARD | grep CSQTT_DOCKER
+~~~
 
 ### Владение правилами Free Turn
 
@@ -603,6 +706,7 @@ iptables -w -t nat -S POSTROUTING | grep FREE_TURN_WG
 
 - systemd WDTT — сервисами **wdtt-firewall.service** и **wdtt.service**;
 - Docker WDTT — Docker restart policy и entrypoint контейнера;
+- Docker CSQTT — Docker restart policy и entrypoint контейнера;
 - Free Turn — **free-turn-proxy-firewall.service**, WireGuard unit и Docker restart policy.
 
 ## VK Call hash
@@ -660,6 +764,21 @@ systemctl is-active wg-quick@wgfreeturn
 
 Команда **--status** проверяет compose-файл, готовность контейнера, UDP listener, OBF profile, WireGuard, IPv4 forwarding, client isolation, allowlist и firewall.
 
+### CSQTT Docker
+
+~~~bash
+docker compose -f /opt/csqtt-docker/docker-compose.yml ps
+docker inspect csqtt --format \
+  'status={{.State.Status}} running={{.State.Running}} restarts={{.RestartCount}}'
+docker logs --since 10m csqtt
+
+sysctl net.ipv4.ip_forward
+ip -br address show csqtt1
+ss -lunp | grep ':46000'
+ss -ltnp | grep ':46002'
+curl -kI https://127.0.0.1:46002/
+~~~
+
 Окончательная функциональная проверка требует реального подключения клиента и открытия сайта через туннель. Локальная готовность процесса сама по себе не подтверждает доступность VK TURN или корректность cloud firewall.
 
 ## Диагностика
@@ -681,7 +800,8 @@ docker compose -f /opt/vkturn-vps-setup/docker-compose.yml logs --tail=150
 ### Порт не слушается
 
 ~~~bash
-ss -lunp | grep -E ':(56000|56001|51820)'
+ss -lunp | grep -E ':(46000|56000|56001|51820)'
+ss -ltnp | grep ':46002'
 ~~~
 
 Проверьте:
@@ -690,7 +810,7 @@ ss -lunp | grep -E ':(56000|56001|51820)'
 - совпадает ли порт в конфигурации и клиенте;
 - разрешён ли UDP в cloud firewall;
 - применились ли локальные правила;
-- не запущены ли WDTT и Free Turn одновременно на 56000/udp.
+- не запущены ли два сервера одновременно на одном публичном порту.
 
 ### Типичные ошибки WDTT
 
@@ -720,11 +840,12 @@ Bootstrap timeout
 | --- | --- | --- |
 | WDTT systemd | /etc/wdtt/passwords.json | /etc/wdtt/backups/ |
 | WDTT Docker | /opt/vkturn-vps-setup/data/passwords.json | /opt/vkturn-vps-setup/backups/ |
+| CSQTT Docker | /opt/csqtt-docker/data/csqtt.db и WAL/SHM sidecars | /opt/csqtt-docker/backups/ |
 | Free Turn | /opt/free-turn-proxy/clients.json и clients/ | Повторный запуск сохраняет peers; рекомендуется внешняя резервная копия /opt/free-turn-proxy и /etc/wireguard |
 
 Не публикуйте:
 
-- **wdtt://** и **vkturnproxy://** import links;
+- **wdtt://**, **csqtt://** и **vkturnproxy://** import links;
 - главный и временные пароли;
 - **.env** файлы;
 - Telegram bot token;
@@ -742,6 +863,9 @@ wdtt-systemd-setup.sh
 
 wdtt-docker-setup.sh
   Интерактивная Docker Compose установка WDTT.
+
+csqtt-docker-setup.sh
+  Интерактивная Docker Compose установка CSQTT.
 
 free-turn-proxy-docker-setup.sh
   Установка и управление Free Turn Proxy.
@@ -771,7 +895,7 @@ Workflow [Smoke tests](https://github.com/XXcipherX/vkturn-vps-setup/actions/wor
 
 - синтаксис Bash и ошибки ShellCheck;
 - YAML workflow и compose templates;
-- генерацию конфигурации WDTT и Free Turn;
+- генерацию конфигурации WDTT, CSQTT и Free Turn;
 - права secret-файлов и каталогов backups;
 - валидацию паролей, public host, DNS и фиксированных подсетей;
 - сохранение базы перед обновлением;
@@ -807,5 +931,6 @@ Smoke-тесты не заменяют проверку на реальном VP
 
 - [XXcipherX/proxy-turn-vk-android](https://github.com/XXcipherX/proxy-turn-vk-android);
 - [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios);
+- [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt) — PolyForm Noncommercial 1.0.0;
 - [samosvalishe/free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy);
 - [samosvalishe/turn-proxy-android](https://github.com/samosvalishe/turn-proxy-android).

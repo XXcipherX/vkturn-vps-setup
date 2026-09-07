@@ -1,0 +1,34 @@
+services:
+  csqtt:
+    image: $CSQTT_DOCKER_IMAGE
+    container_name: csqtt
+    restart: unless-stopped
+    network_mode: host
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    env_file:
+      - ./.env
+    volumes:
+      - ./data:/etc/csqtt
+      - ./run-csqtt.sh:/usr/local/bin/run-csqtt.sh:ro
+      - /run/xtables.lock:/run/xtables.lock
+    labels:
+      io.github.xxcipherx.vkturn-vps-setup: csqtt
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    stop_grace_period: 10s
+    entrypoint: ["/usr/local/bin/run-csqtt.sh"]

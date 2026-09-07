@@ -247,6 +247,88 @@ check_docker_installer() {
   pass "Docker installer validation, rendering, Compose config, and firewall invariants"
 }
 
+check_csqtt_installer() {
+  local out="$TMP_ROOT/csqtt"
+  mkdir -p "$out/data"
+
+  (
+    export CSQTT_INSTALL_DIR="$out"
+    export CSQTT_DOCKER_IMAGE=ghcr.io/xxcipherx/csqtt-server:latest
+    export CSQTT_MAIN_PASSWORD=T7mK2_vQ9-pR4.xL
+    export CSQTT_WEB_USER=admin
+    export CSQTT_WEB_PASS=V8nD3_zR6-pQ2.mT
+    export CSQTT_FEC=safe
+    export CSQTT_PUBLIC_HOST=example.com
+    export CSQTT_PEER_PORT=46000
+    export CSQTT_WEB_PORT=46002
+    export CSQTT_VK_HASHES='https://vk.ru/call/join/abcdefghijklmnop1?from=smoke,abcdefghijklmnop2'
+
+    # shellcheck source=../csqtt-docker-setup.sh
+    source "$ROOT/csqtt-docker-setup.sh"
+    validate_config
+    [ "$CSQTT_VK_HASHES" = 'abcdefghijklmnop1,abcdefghijklmnop2' ] ||
+      fail "CSQTT installer did not normalize VK links and hashes"
+
+    if (CSQTT_MAIN_PASSWORD=short-pass1; validate_config >/dev/null 2>&1); then
+      fail "CSQTT installer accepted a short main password"
+    fi
+    if (CSQTT_PEER_PORT=46002; validate_config >/dev/null 2>&1); then
+      fail "CSQTT installer accepted colliding peer and web ports"
+    fi
+    if (CSQTT_PUBLIC_HOST=10.0.0.1; validate_config >/dev/null 2>&1); then
+      fail "CSQTT installer accepted a private public host"
+    fi
+    if (CSQTT_VK_HASHES=short; validate_config >/dev/null 2>&1); then
+      fail "CSQTT installer accepted a short VK hash"
+    fi
+    if (CSQTT_FEC=aggressive; validate_config >/dev/null 2>&1); then
+      fail "CSQTT installer accepted an unsupported FEC profile"
+    fi
+
+    printf 'sqlite-state\n' > "$out/data/csqtt.db"
+    backup_state
+    write_deploy_override
+
+    export CSQTT_DOCKER_IMAGE CSQTT_WEB_USER CSQTT_WEB_PASS CSQTT_FEC
+    export CSQTT_PUBLIC_HOST CSQTT_PEER_PORT CSQTT_WEB_PORT CSQTT_VK_HASHES
+    envsubst < "$ROOT/templates_for_script/csqtt-compose" > "$out/docker-compose.yml"
+    envsubst < "$ROOT/templates_for_script/csqtt-env" > "$out/.env"
+  )
+
+  cp "$ROOT/templates_for_script/run-csqtt.sh" "$out/run-csqtt.sh"
+  sh -n "$out/run-csqtt.sh"
+  docker compose --env-file "$out/.env" -f "$out/docker-compose.yml" config --quiet
+  assert_no_unresolved '\$CSQTT_[A-Z0-9_]+' "$out/.env" "$out/docker-compose.yml"
+  assert_not_contains "$out/.env" 'CSQTT_MAIN_PASSWORD='
+  assert_not_contains "$out/.env" 'CSQTT_DNS='
+  jq -e '.main_password == "T7mK2_vQ9-pR4.xL" and .device_id == ""' \
+    "$out/data/deploy-overrides.json" >/dev/null || fail "CSQTT deploy override is invalid"
+  [ "$(find "$out/backups" -type f -name csqtt.db | wc -l)" -eq 1 ] ||
+    fail "CSQTT installer did not back up SQLite state"
+  assert_contains "$out/docker-compose.yml" 'network_mode: host'
+  assert_contains "$out/docker-compose.yml" 'cap_drop:'
+  assert_contains "$out/docker-compose.yml" 'NET_ADMIN'
+  assert_contains "$out/docker-compose.yml" 'NET_RAW'
+  assert_not_contains "$out/docker-compose.yml" 'privileged: true'
+  assert_contains "$out/docker-compose.yml" 'max-size: "10m"'
+  assert_contains "$out/docker-compose.yml" 'soft: 65535'
+  assert_contains "$out/run-csqtt.sh" 'COMMENT=CSQTT_DOCKER'
+  assert_contains "$out/run-csqtt.sh" 'TCPMSS --clamp-mss-to-pmtu'
+  assert_contains "$out/run-csqtt.sh" 'MASQUERADE'
+  assert_contains "$out/run-csqtt.sh" 'kill -USR1 "$SERVER_PID"'
+  assert_contains "$out/run-csqtt.sh" '/proc/sys/net/ipv4/ip_forward'
+  assert_not_contains "$out/run-csqtt.sh" 'sysctl -w'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'CSQTT-WIRE-3'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'net.ipv4.ip_forward = 1'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" '200|401'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'Web password:'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'deploy-overrides.json'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'csqtt.db-wal'
+  assert_before "$ROOT/csqtt-docker-setup.sh" 'docker pull "$CSQTT_DOCKER_IMAGE"' 'docker compose -f "$COMPOSE_FILE" down'
+  assert_not_contains "$ROOT/csqtt-docker-setup.sh" 'CSQTT_SSH_PORT'
+  pass "CSQTT validation, one-time password override, state backup, and Compose rendering"
+}
+
 check_free_turn_installer() {
   local out="$TMP_ROOT/free-turn"
   mkdir -p "$out"
@@ -392,6 +474,7 @@ check_repository_contracts() {
   assert_contains "$workflow" 'pull_request:'
   assert_contains "$workflow" 'bash tests/smoke.sh'
   assert_contains "$ROOT/README.md" 'XXcipherX/proxy-turn-vk-android'
+  assert_contains "$ROOT/README.md" 'XXcipherX/csqtt'
   assert_contains "$ROOT/README.md" 'tests/smoke.sh'
   pass "workflow triggers and README references"
 }
@@ -406,6 +489,7 @@ docker compose version >/dev/null 2>&1 || fail "docker compose plugin is missing
 check_shell_syntax
 check_systemd_installer
 check_docker_installer
+check_csqtt_installer
 check_free_turn_installer
 check_repository_contracts
 

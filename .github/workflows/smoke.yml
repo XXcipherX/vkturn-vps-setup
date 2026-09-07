@@ -32,6 +32,7 @@ jobs:
           -d '{extends: relaxed, rules: {line-length: disable, truthy: disable}}'
           .github/workflows/smoke.yml
           templates_for_script/compose
+          templates_for_script/csqtt-compose
           templates_for_script/free-turn-compose
 
       - name: Run repository smoke tests
