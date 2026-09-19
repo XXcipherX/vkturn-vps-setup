@@ -13,6 +13,9 @@ PREREQ_SCRIPT="$PREREQ_DIR/prepare.sh"
 PREREQ_UNIT="/etc/systemd/system/csqtt-docker-prereq.service"
 export DEBIAN_FRONTEND=noninteractive
 
+readonly CSQTT_SOURCE_REPOSITORY="https://github.com/XXcipherX/csqtt-server"
+readonly CSQTT_DEFAULT_DOCKER_IMAGE="ghcr.io/xxcipherx/csqtt-server:latest"
+
 CSQTT_VK_HASHES_SET=0; [ "${CSQTT_VK_HASHES+x}" = x ] && CSQTT_VK_HASHES_SET=1
 CSQTT_PUBLIC_HOST_SET=0; [ "${CSQTT_PUBLIC_HOST+x}" = x ] && CSQTT_PUBLIC_HOST_SET=1
 
@@ -369,12 +372,17 @@ write_deploy_override() {
 }
 
 preflight_image() {
-  local revision
+  local revision source_repository
   revision="$(docker run --rm --entrypoint /usr/local/bin/csqtt "$CSQTT_DOCKER_IMAGE" --protocol-revision 2>/dev/null || true)"
   [ "$revision" = CSQTT-WIRE-3 ] || die "The selected image does not report CSQTT-WIRE-3."
   docker run --rm --entrypoint /bin/sh "$CSQTT_DOCKER_IMAGE" -ec \
     'command -v ip >/dev/null; command -v iptables >/dev/null' || \
     die "The selected image is missing required network tools."
+  if [ "$CSQTT_DOCKER_IMAGE" = "$CSQTT_DEFAULT_DOCKER_IMAGE" ]; then
+    source_repository="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$CSQTT_DOCKER_IMAGE" 2>/dev/null || true)"
+    [ "$source_repository" = "$CSQTT_SOURCE_REPOSITORY" ] || \
+      die "The default image was not published by $CSQTT_SOURCE_REPOSITORY."
+  fi
 }
 
 detect_public_host() {
@@ -435,7 +443,7 @@ main() {
   done
 
   load_saved_config
-  CSQTT_DOCKER_IMAGE="${CSQTT_DOCKER_IMAGE:-ghcr.io/xxcipherx/csqtt-server:latest}"
+  CSQTT_DOCKER_IMAGE="${CSQTT_DOCKER_IMAGE:-$CSQTT_DEFAULT_DOCKER_IMAGE}"
   CSQTT_WEB_USER="${CSQTT_WEB_USER:-admin}"
   CSQTT_FEC="${CSQTT_FEC:-safe}"
   CSQTT_PEER_PORT="${CSQTT_PEER_PORT:-46000}"
@@ -534,6 +542,7 @@ main() {
   printf 'Web password: %s\n' "$CSQTT_WEB_PASS"
   echo "The printed main-password link binds to the first device that connects. Create a separate client password in the web panel for every additional device."
   echo "Compose file: $COMPOSE_FILE"
+  echo "Server source: $CSQTT_SOURCE_REPOSITORY"
   echo "Logs: docker compose -f $COMPOSE_FILE logs -f"
 }
 

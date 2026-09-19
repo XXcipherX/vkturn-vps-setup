@@ -324,6 +324,8 @@ check_csqtt_installer() {
   assert_contains "$ROOT/csqtt-docker-setup.sh" 'Web password:'
   assert_contains "$ROOT/csqtt-docker-setup.sh" 'deploy-overrides.json'
   assert_contains "$ROOT/csqtt-docker-setup.sh" 'csqtt.db-wal'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'CSQTT_SOURCE_REPOSITORY="https://github.com/XXcipherX/csqtt-server"'
+  assert_contains "$ROOT/csqtt-docker-setup.sh" 'org.opencontainers.image.source'
   assert_before "$ROOT/csqtt-docker-setup.sh" 'docker pull "$CSQTT_DOCKER_IMAGE"' 'docker compose -f "$COMPOSE_FILE" down'
   assert_not_contains "$ROOT/csqtt-docker-setup.sh" 'CSQTT_SSH_PORT'
   pass "CSQTT validation, one-time password override, state backup, and Compose rendering"
@@ -474,7 +476,9 @@ check_repository_contracts() {
   assert_contains "$workflow" 'pull_request:'
   assert_contains "$workflow" 'bash tests/smoke.sh'
   assert_contains "$ROOT/README.md" 'XXcipherX/proxy-turn-vk-android'
-  assert_contains "$ROOT/README.md" 'XXcipherX/csqtt'
+  assert_contains "$ROOT/README.md" 'XXcipherX/csqtt-server'
+  assert_contains "$ROOT/README.md" 'amurcanov/csqtt'
+  assert_not_contains "$ROOT/README.md" 'https://github.com/XXcipherX/csqtt)'
   assert_contains "$ROOT/README.md" 'tests/smoke.sh'
   pass "workflow triggers and README references"
 }

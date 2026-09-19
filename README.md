@@ -23,7 +23,7 @@
 | CSQTT, Docker | **csqtt-docker-setup.sh** | CSQTT-WIRE-3 | **csqtt://** | Rust server core, userspace TUN, встроенная HTTPS-панель |
 | Free Turn Proxy, Docker | **free-turn-proxy-docker-setup.sh** | SRTP-WRAP-S | **vkturnproxy://** и **freeturn://** | Отдельные клиенты, OBF rtpopus3, локальный или внешний backend |
 
-Для каждого варианта используйте указанные в таблице формат ссылки и режим клиента. Для CSQTT нужен клиент с поддержкой CSQTT-WIRE-3: Android-клиент из репозитория CSQTT или iOS-клиент [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios) версии **v1.0-build364** либо новее.
+Для каждого варианта используйте указанные в таблице формат ссылки и режим клиента. Для CSQTT нужен клиент с поддержкой CSQTT-WIRE-3: Android-клиент из оригинального репозитория [amurcanov/csqtt](https://github.com/amurcanov/csqtt) или iOS-клиент [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios) версии **v1.0-build364** либо новее.
 
 Порты по умолчанию приведены в таблицах ниже. При размещении нескольких серверов на одном VPS необходимо назначить непересекающиеся порты и проверить firewall. Для обычной эксплуатации проще использовать отдельный VPS для каждого сервера.
 
@@ -57,7 +57,7 @@ CSQTT Android или совместимый iOS-клиент
   -> Internet
 ~~~
 
-CSQTT — сервер на Rust, который передаёт IP-пакеты через RTP AEAD / CSQTT-WIRE-3 и userspace TUN. Установщик использует server core и Android-клиент из [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt). iOS-клиент [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios) поддерживает тот же протокол начиная с **v1.0-build364** и принимает напечатанную установщиком ссылку **csqtt://**.
+CSQTT — сервер на Rust, который передаёт IP-пакеты через RTP AEAD / CSQTT-WIRE-3 и userspace TUN. Серверный core и Docker image выпускаются отдельным проектом [XXcipherX/csqtt-server](https://github.com/XXcipherX/csqtt-server). Его CI проверяет протокольную совместимость с оригинальным Android-клиентом [amurcanov/csqtt](https://github.com/amurcanov/csqtt) и iOS-клиентом [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios); iOS поддерживает этот протокол начиная с **v1.0-build364** и принимает напечатанную установщиком ссылку **csqtt://**.
 
 ### Free Turn Proxy / SRTP-WRAP-S
 
@@ -405,7 +405,7 @@ sudo CSQTT_DOCKER_IMAGE=registry.example.com/csqtt-server:tag \
   bash csqtt-docker-setup.sh
 ~~~
 
-Стандартный image публикуется ручным workflow **Build and push server image** в репозитории [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt/actions/workflows/docker-image.yml). Для установки без `docker login ghcr.io` пакет GHCR должен быть публичным.
+Стандартный image публикуется workflow **Build and push Docker image** в отдельном серверном репозитории [XXcipherX/csqtt-server](https://github.com/XXcipherX/csqtt-server/actions/workflows/docker-image.yml). Установщик проверяет OCI source label стандартного image и принимает его только от этого репозитория. Для установки без `docker login ghcr.io` пакет GHCR должен быть публичным.
 
 ## Free Turn Proxy
 
@@ -931,6 +931,7 @@ Smoke-тесты не заменяют проверку на реальном VP
 
 - [XXcipherX/proxy-turn-vk-android](https://github.com/XXcipherX/proxy-turn-vk-android);
 - [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios);
-- [XXcipherX/csqtt](https://github.com/XXcipherX/csqtt) — PolyForm Noncommercial 1.0.0;
+- [XXcipherX/csqtt-server](https://github.com/XXcipherX/csqtt-server) — сервер и Docker image, PolyForm Noncommercial 1.0.0;
+- [amurcanov/csqtt](https://github.com/amurcanov/csqtt) — оригинальный Android-клиент, PolyForm Noncommercial 1.0.0;
 - [samosvalishe/free-turn-proxy](https://github.com/samosvalishe/free-turn-proxy);
 - [samosvalishe/turn-proxy-android](https://github.com/samosvalishe/turn-proxy-android).
